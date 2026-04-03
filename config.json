@@ -1,0 +1,35 @@
+{
+  "server": {
+    "base_url": "http://localhost:8000",
+    "timeout_sec": 60,
+    "retry_count": 3,
+    "retry_backoff": 2.0
+  },
+  "cst": {
+    "executable_path": "C:\\Program Files\\CST Studio Suite 2024\\CST Studio.exe",
+    "project_dir": "C:\\Users\\<user>\\Documents\\CST Projects",
+    "default_units": "mm",
+    "frequency_units": "ghz",
+    "auto_save": true,
+    "save_interval_sec": 300
+  },
+  "ui": {
+    "theme": "light",
+    "default_width": 1200,
+    "default_height": 800,
+    "auto_connect": true,
+    "show_advanced": false
+  },
+  "logging": {
+    "level": "INFO",
+    "max_file_size_mb": 10,
+    "backup_count": 5,
+    "log_dir": "logs"
+  },
+  "client_capabilities": {
+    "supports_farfield_export": true,
+    "supports_current_distribution_export": true,
+    "max_simulation_timeout_sec": 600,
+    "export_formats": ["json", "csv"]
+  }
+}

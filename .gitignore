@@ -1,0 +1,76 @@
+# Virtual Environments
+env/
+venv/
+ENV/
+VENV/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# Logs
+logs/
+*.log
+
+# Data & Persistence
+data/
+*.db
+*.sqlite
+*.sqlite3
+*.json.bak
+sessions.db
+designs.db
+
+# OS
+.DS_Store
+Thumbs.db
+*.lnk
+
+# CST Projects (large files)
+*.cst
+CST Projects/
+
+# Temp files
+*.tmp
+*.temp
+tmp/
+temp/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Node (if using JS tools)
+node_modules/
+package-lock.json
+yarn.lock
