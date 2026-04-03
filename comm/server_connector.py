@@ -108,9 +108,16 @@ class ServerConnector:
                 response = await self.client.request(method, url, **kwargs)
                 response.raise_for_status()
                 return response.json()
-            except httpx.HTTPError as e:
+            except Exception as e:
                 last_error = e
-                logger.warning(f"Request failed (attempt {attempt + 1}/{self.retry_count}): {e}")
+                
+                # Better error logging
+                error_type = type(e).__name__
+                error_msg = str(e) if str(e) else "Unknown error"
+                logger.warning(
+                    f"Request failed (attempt {attempt + 1}/{self.retry_count}): "
+                    f"{error_type} - {error_msg}"
+                )
                 
                 if attempt < self.retry_count - 1:
                     wait_time = self.retry_backoff ** attempt

@@ -1,13 +1,13 @@
 {
   "server": {
-    "base_url": "http://localhost:8000",
+    "base_url": "http://192.168.234.89:8000",
     "timeout_sec": 60,
     "retry_count": 3,
     "retry_backoff": 2.0
   },
   "cst": {
-    "executable_path": "C:\\Program Files\\CST Studio Suite 2024\\CST Studio.exe",
-    "project_dir": "C:\\Users\\<user>\\Documents\\CST Projects",
+    "executable_path": "C:\\Program Files (x86)\\CST Studio Suite 2024\\CST DESIGN ENVIRONMENT.exe",
+    "project_dir": "E:\\antenna",
     "default_units": "mm",
     "frequency_units": "ghz",
     "auto_save": true,

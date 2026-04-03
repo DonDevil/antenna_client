@@ -134,7 +134,7 @@ class ChatWidget(QWidget):
         
         Args:
             text: Message content
-            sender: "user" or "assistant"
+            sender: "user", "assistant", or "system"
         """
         timestamp = datetime.now().strftime("%H:%M:%S")
         
@@ -151,6 +151,13 @@ class ChatWidget(QWidget):
             fmt_content = QTextCharFormat()
             fmt_content.setForeground(QColor("#333333"))
             cursor.insertText(f"{text}\n\n", fmt_content)
+        elif sender == "system":
+            # System messages (loading, errors, etc.)
+            fmt = QTextCharFormat()
+            fmt.setForeground(QColor("#ff6f00"))
+            fmt.setFont(QFont("Segoe UI", 9, QFont.Weight.Normal))
+            fmt.setFontItalic(True)
+            cursor.insertText(f"{text}\n", fmt)
         else:
             fmt = QTextCharFormat()
             fmt.setForeground(QColor("#2e7d32"))
@@ -162,7 +169,10 @@ class ChatWidget(QWidget):
             cursor.insertText(f"{text}\n\n", fmt_content)
         
         self.message_display.setTextCursor(cursor)
-        self.messages.append({"sender": sender, "text": text, "timestamp": timestamp})
+        
+        # Don't store system messages in history
+        if sender != "system":
+            self.messages.append({"sender": sender, "text": text, "timestamp": timestamp})
     
     def display_markdown(self, markdown_text: str):
         """Display markdown-formatted text as assistant message

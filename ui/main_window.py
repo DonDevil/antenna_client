@@ -12,15 +12,37 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSplitter, QMenuBar, QMenu, QMessageBox
 )
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QThread, Signal
 from PySide6.QtGui import QIcon, QAction
 from ui.chat_widget import ChatWidget
 from ui.design_panel import DesignPanel
 from ui.status_bar import AppStatusBar
 from utils.logger import get_logger
+from utils.connection_checker import ConnectionChecker
+from utils.chat_message_handler import ChatMessageHandler
+from utils.health_monitor import HealthMonitor
+import asyncio
 
 
 logger = get_logger(__name__)
+
+
+class ConnectionWorker(QThread):
+    """Worker thread for async connection checking"""
+    
+    connection_result = Signal(dict)  # Emits result dict
+    
+    def run(self):
+        """Run connection check in background thread"""
+        try:
+            # Run async check_all() in new event loop
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            result = loop.run_until_complete(ConnectionChecker.check_all())
+            self.connection_result.emit(result)
+        except Exception as e:
+            logger.error(f"Connection check error: {e}")
+            self.connection_result.emit({"error": str(e)})
 
 
 class MainWindow(QMainWindow):
@@ -29,12 +51,16 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Antenna Optimization Client")
-        self.resize(QSize(1400, 900))
+        self.resize(QSize(1200, 700))
         
         # Initialize UI components
         self.init_ui()
         self.setup_menus()
         self.setup_shortcuts()
+        
+        # Start automatic health monitoring (periodic checks every 30 seconds)
+        self.health_monitor = HealthMonitor(self.status_bar, check_interval_sec=30)
+        self.health_monitor.start()
         
         logger.info("MainWindow initialized")
     
@@ -68,10 +94,13 @@ class MainWindow(QMainWindow):
         self.status_bar = AppStatusBar()
         self.setStatusBar(self.status_bar)
         
+        # Connect chat to server communication
+        self.message_handler = ChatMessageHandler(self.chat_widget)
+        
         logger.info("UI layout initialized")
     
     def setup_menus(self):
-        """Setup menu bar with File, Edit, Help menus"""
+        """Setup menu bar with File, Edit, Tools, Help menus"""
         menubar = self.menuBar()
         
         # File menu
@@ -101,6 +130,13 @@ class MainWindow(QMainWindow):
         preferences_action = QAction("Preferences", self)
         preferences_action.triggered.connect(self.show_preferences)
         edit_menu.addAction(preferences_action)
+        
+        # Tools menu
+        tools_menu = menubar.addMenu("Tools")
+        
+        check_connection_action = QAction("Check Connection", self)
+        check_connection_action.triggered.connect(self.check_connection)
+        tools_menu.addAction(check_connection_action)
         
         # Help menu
         help_menu = menubar.addMenu("Help")
@@ -152,6 +188,75 @@ class MainWindow(QMainWindow):
             "A modular Windows desktop application for iterative antenna design optimization.\n\n"
             "© 2026 Antenna Optimization Team"
         )
+    
+    def check_connection(self):
+        """Check server and CST connectivity"""
+        # Show checking status
+        self.status_bar.show_message("Checking connection...")
+        
+        # Create worker thread
+        self.worker = ConnectionWorker()
+        self.worker.connection_result.connect(self.on_connection_result)
+        self.worker.start()
+    
+    def on_connection_result(self, result: dict):
+        """Handle connection check result
+        
+        Args:
+            result: Dict with connection status
+        """
+        if "error" in result:
+            # Error occurred
+            QMessageBox.critical(
+                self,
+                "Connection Check Error",
+                f"Failed to check connections:\n{result['error']}"
+            )
+            self.status_bar.show_message("Connection check failed")
+            return
+        
+        # Extract results
+        server_ok, server_msg = result.get("server", (False, "Unknown"))
+        cst_ok, cst_msg = result.get("cst", (False, "Unknown"))
+        
+        # Update status bar
+        self.status_bar.set_server_connected(server_ok)
+        self.status_bar.set_cst_available(cst_ok)
+        
+        # Show detailed results
+        status_text = f"Server: {server_msg}\n\nCST Studio: {cst_msg}"
+        
+        if server_ok and cst_ok:
+            QMessageBox.information(
+                self,
+                "✅ Connection Check Passed",
+                status_text
+            )
+            self.status_bar.show_message("All connections OK")
+        elif server_ok or cst_ok:
+            QMessageBox.warning(
+                self,
+                "⚠️ Partial Connection",
+                status_text
+            )
+            self.status_bar.show_message("Some connections failed")
+        else:
+            QMessageBox.warning(
+                self,
+                "❌ Connection Check Failed",
+                status_text
+            )
+            self.status_bar.show_message("Connections unavailable")
+    
+    def closeEvent(self, event):
+        """Handle window close event"""
+        # Stop health monitor
+        if self.health_monitor:
+            self.health_monitor.stop()
+        
+        # Continue with normal close
+        super().closeEvent(event)
+        logger.info("MainWindow closed")
 
 
 def main():
