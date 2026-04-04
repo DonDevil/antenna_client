@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Dict, List, Any
 
-from cst.cst_app import CSTApp
+from cst_client.cst_app import CSTApp
 from executor.command_parser import CommandPackage, Command
 from executor.vba_generator import VBAGenerator
 from utils.logger import get_logger
@@ -111,6 +111,23 @@ class ExecutionEngine:
             ExecutionResult
         """
         try:
+            if command.command == "create_project":
+                project_name = str(command.params.get("project_name", "server_generated_project"))
+                project_path = self.cst_app.create_project(project_name) if not self.dry_run else None
+                if not self.dry_run and not project_path:
+                    return ExecutionResult(
+                        f"{command.seq}:{command.command}",
+                        success=False,
+                        error=f"Failed to create CST project: {project_name}",
+                    )
+                mode = "prepared" if self.dry_run else "executed"
+                return ExecutionResult(
+                    f"{command.seq}:{command.command}",
+                    success=True,
+                    output=f"{mode.capitalize()} create_project successfully",
+                    macro="",
+                )
+
             # Generate VBA for command
             vba_code = self.vba_generator.generate_macro(command.command, command.params)
 

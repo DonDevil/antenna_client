@@ -26,7 +26,7 @@ import platform
 from pathlib import Path
 from typing import Any
 
-import win32com.client  # type: ignore[import-untyped]
+import cst.interface
 
 from executor.vba_generator import VBAGenerator
 
@@ -131,92 +131,68 @@ def load_config() -> dict[str, Any]:
 
 class CSTCommandConsole:
     def __init__(self) -> None:
-        self.app = None
+        self.design_env = None
+        self.project = None
         self.mws = None
         self.vba_generator = VBAGenerator()
         self.last_macro = ""
 
         self.config = load_config()
         self.cst_exe = self.config.get("cst", {}).get("executable_path", "")
+        configured_project_dir = self.config.get("cst", {}).get("project_dir")
+        self.project_dir = Path(configured_project_dir) if configured_project_dir else (Path.cwd() / "artifacts")
+        self.project_dir.mkdir(parents=True, exist_ok=True)
+        self._history_counter = 0
+
+    def refresh_project(self) -> None:
+        if self.design_env is None:
+            return
+        if self.design_env.has_active_project():
+            self.project = self.design_env.active_project()
+            self.mws = self.project.model3d
 
     def connect(self) -> None:
         if platform.system() != "Windows":
             raise RuntimeError("CST COM automation is only supported on Windows.")
 
-        try:
-            self.app = win32com.client.GetObject(class_="CSTStudio.Application")
-            print("Connected to existing CST instance.")
-        except Exception:
-            self.app = win32com.client.Dispatch("CSTStudio.Application")
-            print("Started new CST instance.")
+        self.design_env = cst.interface.DesignEnvironment.connect_to_any_or_new()
+        print("Connected to CST design environment.")
 
-        self.mws = self._get_active_mws()
-        if self.mws is None:
+        self.refresh_project()
+        if self.project is not None:
+            print(f"Active project: {self.project.filename()}")
+        else:
+            self.project = None
+            self.mws = None
             print("No active CST project is open. Use create_project first.")
 
-    def _get_active_mws(self):
-        candidates = ["ActiveMWS", "active_mws", "MWS", "Active3D"]
-        for attr in candidates:
-            try:
-                value = getattr(self.app, attr)
-                if callable(value):
-                    value = value()
-                if value is not None:
-                    return value
-            except Exception:
-                continue
-        return None
-
     def create_project(self, project_name: str) -> None:
-        if self.app is None:
+        if self.design_env is None:
             raise RuntimeError("CST not connected.")
 
-        new_methods = ["NewMWS", "new_mws"]
-        created = False
-        for method in new_methods:
-            fn = getattr(self.app, method, None)
-            if fn is None:
-                continue
-            try:
-                fn()
-                created = True
-                break
-            except Exception:
-                continue
+        safe_name = "_".join(project_name.strip().split()) or "command_console_project"
+        project_path = self.project_dir / f"{safe_name}.cst"
 
-        if not created:
-            raise RuntimeError("Could not create a new CST project with available COM methods.")
+        self.project = self.design_env.new_mws()
+        self.mws = self.project.model3d
+        self.mws.SaveAs(str(project_path.resolve()), True)
+        self.refresh_project()
 
-        self.mws = self._get_active_mws()
-        if self.mws is None:
-            raise RuntimeError("Project creation succeeded but ActiveMWS is unavailable.")
-
-        print(f"Created/activated project for command testing: {project_name}")
+        print(f"Created/activated project: {project_path.resolve()}")
 
     def run_vba(self, title: str, code: str) -> None:
         if self.mws is None:
             raise RuntimeError("No active CST project. Run create_project first.")
 
         self.last_macro = code
-
-        methods = ["AddToHistory", "add_to_history", "RunVBACode", "ExecuteVBACode"]
-        for method in methods:
-            fn = getattr(self.mws, method, None)
-            if fn is None:
-                continue
-            try:
-                if method.lower().endswith("history"):
-                    fn(title, code)
-                else:
-                    fn(code)
-                return
-            except Exception:
-                continue
-
-        raise RuntimeError(
-            "Unable to execute VBA with known COM methods. "
-            "Check CST COM API for this version and update run_vba()."
-        )
+        self.refresh_project()
+        if self.mws is None:
+            raise RuntimeError("CST project handle became unavailable. Recreate or reopen the project.")
+        self._history_counter += 1
+        history_title = f"{title}_{self._history_counter:03d}"
+        self.mws.add_to_history(history_title, code)
+        self.mws.full_history_rebuild()
+        self.refresh_project()
 
     def merge_params(self, command: str, user_params: dict[str, Any]) -> dict[str, Any]:
         params = dict(DEFAULT_PARAMS.get(command, {}))

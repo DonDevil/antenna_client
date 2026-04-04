@@ -58,18 +58,15 @@ With Brick
     .Name \"{name}\"
     .Component \"component1\"
     .Material \"{material}\"
-    .Xmin {x_min}
-    .Xmax {x_max}
-    .Ymin {y_min}
-    .Ymax {y_max}
-    .Zmin {z_min}
-    .Zmax {z_max}
+    .Xrange \"{x_min}\", \"{x_max}\"
+    .Yrange \"{y_min}\", \"{y_max}\"
+    .Zrange \"{z_min}\", \"{z_max}\"
     .Create
 End With
 """.strip()
 
     def _create_project(self, parameters: Dict[str, Any]) -> str:
-        return f"' create_project\n' Project Name: {parameters['project_name']}"
+        raise ValueError("create_project must be handled by the caller, not emitted as VBA")
 
     def _set_units(self, parameters: Dict[str, Any]) -> str:
         return f"""
@@ -91,7 +88,10 @@ End With
 With Material
     .Reset
     .Name \"{name}\"
-    .Conductivity \"{conductivity}\"
+    .Folder \"\"
+    .FrqType \"all\"
+    .Type \"Lossy metal\"
+    .Sigma \"{conductivity}\"
     .Create
 End With
 """.strip()
@@ -101,6 +101,9 @@ End With
 With Material
     .Reset
     .Name \"{name}\"
+    .Folder \"\"
+    .FrqType \"all\"
+    .Type \"Normal\"
     .Epsilon \"{epsilon_r}\"
     .TanD \"{loss_tangent}\"
     .Create
@@ -149,17 +152,22 @@ End With
         return self._brick(parameters["name"], parameters["material"], x_min, x_max, y_min, y_max, z_min, z_max)
 
     def _create_port(self, parameters: Dict[str, Any]) -> str:
-        ref = parameters["reference_mm"]
+        p1 = parameters.get("p1_mm") or parameters.get("reference_mm")
+        if p1 is None:
+            raise ValueError("create_port requires p1_mm or reference_mm")
+        p2 = parameters.get("p2_mm") or {"x": p1["x"], "y": p1["y"], "z": p1["z"] + 1.0}
         return f"""
-With Port
+With DiscretePort
     .Reset
-    .PortNumber {parameters['port_id']}
+    .PortNumber \"{parameters['port_id']}\"
     .Label \"port_{parameters['port_id']}\"
-    .PortType \"{parameters['port_type']}\"
-    .Impedance {parameters['impedance_ohm']}
-    .XrangeAdd {ref['x']}
-    .YrangeAdd {ref['y']}
-    .ZrangeAdd {ref['z']}
+    .Type \"SParameter\"
+    .Impedance \"{parameters['impedance_ohm']}\"
+    .SetP1 \"{p1['x']}\", \"{p1['y']}\", \"{p1['z']}\"
+    .SetP2 \"{p2['x']}\", \"{p2['y']}\", \"{p2['z']}\"
+    .InvertDirection \"False\"
+    .LocalCoordinates \"False\"
+    .Monitor \"True\"
     .Create
 End With
 """.strip()
@@ -178,10 +186,15 @@ End With
 """.strip()
 
     def _set_solver(self, parameters: Dict[str, Any]) -> str:
+        solver_type = str(parameters["solver_type"]).lower()
+        if solver_type == "time_domain":
+            target = "HF Time Domain"
+        elif solver_type == "frequency_domain":
+            target = "HF Frequency Domain"
+        else:
+            raise ValueError(f"Unsupported solver_type for CST live execution: {parameters['solver_type']}")
         return f"""
-With Solver
-    .Method \"{parameters['solver_type']}\"
-End With
+ChangeSolverType \"{target}\"
 ' mesh_cells_per_wavelength={parameters['mesh_cells_per_wavelength']}
 """.strip()
 
@@ -193,17 +206,13 @@ Solver.Start
 """.strip()
 
     def _export_s_parameters(self, parameters: Dict[str, Any]) -> str:
-        return f"' export_s_parameters format={parameters['format']} destination_hint={parameters['destination_hint']}"
+        raise ValueError("export_s_parameters is not implemented for live CST execution yet")
 
     def _extract_summary_metrics(self, parameters: Dict[str, Any]) -> str:
-        metrics = ", ".join(parameters.get("metrics", []))
-        return f"' extract_summary_metrics metrics={metrics}"
+        raise ValueError("extract_summary_metrics is not implemented for live CST execution yet")
 
     def _export_farfield(self, parameters: Dict[str, Any]) -> str:
-        return (
-            f"' export_farfield format={parameters['format']} "
-            f"frequency_ghz={parameters['frequency_ghz']} destination_hint={parameters['destination_hint']}"
-        )
+        raise ValueError("export_farfield is not implemented for live CST execution yet")
     
     def generate_package_script(self, commands_code: List[str]) -> str:
         """Generate complete VBA script from multiple macros

@@ -1,5 +1,7 @@
 # Virtual Environments
 env/
+env311/
+env310/
 venv/
 ENV/
 VENV/

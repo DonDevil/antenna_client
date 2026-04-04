@@ -25,7 +25,6 @@ class VBAExecutor:
             cst_app: CSTApp instance with active connection
         """
         self.cst_app = cst_app
-        self.mws = cst_app.mws if cst_app.is_connected() else None
         logger.info("VBAExecutor initialized")
     
     def execute_macro(self, macro_code: str) -> bool:
@@ -37,14 +36,13 @@ class VBAExecutor:
         Returns:
             True if successful, False otherwise
         """
-        if not self.cst_app.is_connected() or self.mws is None:
+        if not self.cst_app.is_connected() or self.cst_app.mws is None:
             logger.error("CST not connected")
             return False
         
         try:
-            # Execute VBA via MWS interface
-            # CST executes code in add_to_history method
-            self.mws.add_to_history("VBA Code", macro_code)
+            self.cst_app.mws.add_to_history("VBA Code", macro_code)
+            self.cst_app.mws.full_history_rebuild()
             logger.info("VBA macro executed successfully")
             return True
         except Exception as e:
@@ -60,7 +58,7 @@ class VBAExecutor:
         Returns:
             Result of statement or None
         """
-        if not self.cst_app.is_connected() or self.mws is None:
+        if not self.cst_app.is_connected() or self.cst_app.mws is None:
             logger.error("CST not connected")
             return None
         
