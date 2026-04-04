@@ -16,13 +16,51 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+class AnnDimensions(BaseModel):
+    """Predicted antenna dimensions from ANN model"""
+    patch_length_mm: float = 0.0
+    patch_width_mm: float = 0.0
+    patch_height_mm: float = 0.0
+    substrate_length_mm: float = 0.0
+    substrate_width_mm: float = 0.0
+    substrate_height_mm: float = 0.0
+    feed_length_mm: float = 0.0
+    feed_width_mm: float = 0.0
+    feed_offset_x_mm: float = 0.0
+    feed_offset_y_mm: float = 0.0
+
+
+class AnnPrediction(BaseModel):
+    """ANN prediction block from server"""
+    ann_model_version: str = "unknown"
+    confidence: float = 0.0
+    dimensions: AnnDimensions = AnnDimensions()
+
+
 class OptimizeResponse(BaseModel):
-    """Response schema from /api/v1/optimize endpoint"""
-    status: str  # "success", "clarification_required", "error"
+    """Response schema from /api/v1/optimize endpoint — matches server schema_version optimize_response.v1"""
+    model_config = {"extra": "ignore"}
+
+    schema_version: str = "optimize_response.v1"
+    # Server returns: "accepted", "completed", "clarification_required", "error"
+    status: str
+    session_id: Optional[str] = None
+    trace_id: Optional[str] = None
+    current_stage: Optional[str] = None
+    ann_prediction: Optional[AnnPrediction] = None
     command_package: Optional[Dict[str, Any]] = None
-    clarification: Optional[str] = None
-    error_message: Optional[str] = None
-    next_step: Optional[str] = None
+    clarification: Optional[Dict[str, Any]] = None
+    warnings: list = []
+    error: Optional[Dict[str, Any]] = None
+
+    @property
+    def error_message(self) -> Optional[str]:
+        """Compatibility shim — extract message from error dict."""
+        if self.error is None:
+            return None
+        if isinstance(self.error, dict):
+            return self.error.get("message") or self.error.get("error_code") or str(self.error)
+        return str(self.error)
 
 
 class ResponseHandler:
@@ -62,17 +100,26 @@ class ResponseHandler:
             "message": None
         }
         
-        if response.status == "success" and response.command_package:
+        if response.status in ("accepted", "completed") and response.command_package:
             result["action"] = "execute"
             result["data"] = response.command_package
             result["message"] = "Ready to execute design"
-            logger.info("Server returned valid command package")
-        
+            logger.info(f"Server returned command package (status={response.status})")
+
+        elif response.status in ("accepted", "completed") and not response.command_package:
+            result["action"] = "accepted"
+            result["message"] = "Design accepted by server (no command package yet)"
+            logger.info(f"Server accepted design without command package (status={response.status})")
+
         elif response.status == "clarification_required":
             result["action"] = "clarify"
-            result["message"] = response.clarification or "Server needs clarification"
-            logger.info(f"Server requesting clarification: {response.clarification}")
-        
+            clarification = response.clarification
+            if isinstance(clarification, dict):
+                result["message"] = clarification.get("reason") or str(clarification)
+            else:
+                result["message"] = clarification or "Server needs clarification"
+            logger.info(f"Server requesting clarification: {result['message']}")
+
         elif response.status == "error":
             result["action"] = "error"
             result["message"] = response.error_message or "Unknown error"

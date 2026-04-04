@@ -94,8 +94,9 @@ class MainWindow(QMainWindow):
         self.status_bar = AppStatusBar()
         self.setStatusBar(self.status_bar)
         
-        # Connect chat to server communication
-        self.message_handler = ChatMessageHandler(self.chat_widget)
+        # Connect UI widgets to the client workflow controller
+        self.message_handler = ChatMessageHandler(self.chat_widget, self.design_panel, self.status_bar)
+        self.message_handler.reset_workflow()
         
         logger.info("UI layout initialized")
     
@@ -156,8 +157,7 @@ class MainWindow(QMainWindow):
     
     def new_design(self):
         """Create new design"""
-        self.chat_widget.clear_history()
-        self.design_panel.reset_values()
+        self.message_handler.reset_workflow()
         self.status_bar.show_message("New design created")
         logger.info("New design created")
     

@@ -1,26 +1,27 @@
-"""
-DesignPanel - Design specifications and antenna parameters display
-
-Responsible for:
-- Current design specs display
-- Antenna family selector
-- Frequency/bandwidth input fields
-- Constraints editor
-- Quick-action buttons
-"""
+"""Design-side controls for pipeline input, feedback, and export."""
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QComboBox, QPushButton, QGroupBox, QSpinBox, QDoubleSpinBox,
-    QFormLayout
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QComboBox,
+    QPushButton,
+    QGroupBox,
+    QDoubleSpinBox,
+    QFormLayout,
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 
 
 class DesignPanel(QWidget):
     """Widget for antenna design specifications"""
-    
+
     design_changed = Signal(dict)
+    start_pipeline_requested = Signal()
+    reset_requested = Signal()
+    export_requested = Signal()
+    feedback_requested = Signal(dict)
     
     def __init__(self):
         super().__init__()
@@ -36,12 +37,12 @@ class DesignPanel(QWidget):
         
         # Antenna family
         self.antenna_combo = QComboBox()
-        self.antenna_combo.addItems(["Patch", "Helical", "Horn", "Log Periodic"])
+        self.antenna_combo.addItems(["amc_patch", "microstrip_patch", "wban_patch"])
         specs_layout.addRow("Antenna Type:", self.antenna_combo)
         
         # Frequency
         self.freq_spin = QDoubleSpinBox()
-        self.freq_spin.setRange(0.1, 300)
+        self.freq_spin.setRange(0.1, 100.0)
         self.freq_spin.setValue(2.4)
         self.freq_spin.setSuffix(" GHz")
         self.freq_spin.setSingleStep(0.1)
@@ -49,8 +50,8 @@ class DesignPanel(QWidget):
         
         # Bandwidth
         self.bw_spin = QDoubleSpinBox()
-        self.bw_spin.setRange(1, 10000)
-        self.bw_spin.setValue(50)
+        self.bw_spin.setRange(1, 5000)
+        self.bw_spin.setValue(100)
         self.bw_spin.setSuffix(" MHz")
         self.bw_spin.setSingleStep(10)
         specs_layout.addRow("Bandwidth:", self.bw_spin)
@@ -76,22 +77,123 @@ class DesignPanel(QWidget):
         
         constraints_group.setLayout(constraints_layout)
         layout.addWidget(constraints_group)
+
+        # Session info
+        session_group = QGroupBox("Pipeline State")
+        session_layout = QFormLayout()
+        self.session_label = QLabel("-")
+        self.trace_label = QLabel("-")
+        self.stage_label = QLabel("Idle")
+        self.command_count_label = QLabel("0")
+        session_layout.addRow("Session ID:", self.session_label)
+        session_layout.addRow("Trace ID:", self.trace_label)
+        session_layout.addRow("Stage:", self.stage_label)
+        session_layout.addRow("Commands:", self.command_count_label)
+        session_group.setLayout(session_layout)
+        layout.addWidget(session_group)
+
+        # Feedback group
+        feedback_group = QGroupBox("Simulation Feedback")
+        feedback_layout = QFormLayout()
+
+        self.fb_freq_spin = QDoubleSpinBox()
+        self.fb_freq_spin.setRange(0.0, 100.0)
+        self.fb_freq_spin.setDecimals(4)
+        self.fb_freq_spin.setSuffix(" GHz")
+        feedback_layout.addRow("Center Freq:", self.fb_freq_spin)
+
+        self.fb_bw_spin = QDoubleSpinBox()
+        self.fb_bw_spin.setRange(0.0, 5000.0)
+        self.fb_bw_spin.setDecimals(2)
+        self.fb_bw_spin.setSuffix(" MHz")
+        feedback_layout.addRow("Bandwidth:", self.fb_bw_spin)
+
+        self.fb_vswr_spin = QDoubleSpinBox()
+        self.fb_vswr_spin.setRange(1.0, 100.0)
+        self.fb_vswr_spin.setDecimals(2)
+        self.fb_vswr_spin.setValue(1.5)
+        feedback_layout.addRow("VSWR:", self.fb_vswr_spin)
+
+        self.fb_gain_spin = QDoubleSpinBox()
+        self.fb_gain_spin.setRange(-100.0, 100.0)
+        self.fb_gain_spin.setDecimals(2)
+        self.fb_gain_spin.setSuffix(" dBi")
+        self.fb_gain_spin.setValue(0.0)
+        feedback_layout.addRow("Gain:", self.fb_gain_spin)
+
+        self.submit_feedback_btn = QPushButton("Submit Feedback")
+        self.submit_feedback_btn.clicked.connect(self._emit_feedback_requested)
+        feedback_layout.addRow(self.submit_feedback_btn)
+
+        feedback_group.setLayout(feedback_layout)
+        layout.addWidget(feedback_group)
         
         # Action buttons
         buttons_layout = QHBoxLayout()
+        start_btn = QPushButton("Start Pipeline")
         reset_btn = QPushButton("Reset")
         export_btn = QPushButton("Export")
-        reset_btn.clicked.connect(self.reset_values)
+        start_btn.clicked.connect(self.start_pipeline_requested.emit)
+        reset_btn.clicked.connect(self.reset_requested.emit)
+        export_btn.clicked.connect(self.export_requested.emit)
+        buttons_layout.addWidget(start_btn)
         buttons_layout.addWidget(reset_btn)
         buttons_layout.addWidget(export_btn)
         layout.addLayout(buttons_layout)
         
+        self.antenna_combo.currentTextChanged.connect(self._emit_design_changed)
+        self.freq_spin.valueChanged.connect(self._emit_design_changed)
+        self.bw_spin.valueChanged.connect(self._emit_design_changed)
+        self.vswr_spin.valueChanged.connect(self._emit_design_changed)
+        self.gain_spin.valueChanged.connect(self._emit_design_changed)
+
         layout.addStretch()
     
     def reset_values(self):
         """Reset to default values"""
+        self.antenna_combo.setCurrentText("amc_patch")
         self.freq_spin.setValue(2.4)
-        self.bw_spin.setValue(50)
+        self.bw_spin.setValue(100)
+        self.vswr_spin.setValue(1.5)
+        self.gain_spin.setValue(6.0)
+        self.fb_freq_spin.setValue(0.0)
+        self.fb_bw_spin.setValue(0.0)
+        self.fb_vswr_spin.setValue(1.5)
+        self.fb_gain_spin.setValue(0.0)
+        self.set_session_metadata(None, None, "Idle", 0)
+
+    def set_spec_values(
+        self,
+        *,
+        frequency_ghz: float | None = None,
+        bandwidth_mhz: float | None = None,
+        antenna_family: str | None = None,
+    ) -> None:
+        """Update fields from parsed chat or session state."""
+        if antenna_family and antenna_family in [self.antenna_combo.itemText(i) for i in range(self.antenna_combo.count())]:
+            self.antenna_combo.setCurrentText(antenna_family)
+        if frequency_ghz is not None:
+            self.freq_spin.setValue(max(self.freq_spin.minimum(), min(self.freq_spin.maximum(), float(frequency_ghz))))
+        if bandwidth_mhz is not None:
+            self.bw_spin.setValue(max(self.bw_spin.minimum(), min(self.bw_spin.maximum(), float(bandwidth_mhz))))
+
+    def set_session_metadata(
+        self,
+        session_id: str | None,
+        trace_id: str | None,
+        stage: str,
+        command_count: int,
+    ) -> None:
+        self.session_label.setText(session_id or "-")
+        self.trace_label.setText(trace_id or "-")
+        self.stage_label.setText(stage or "Idle")
+        self.command_count_label.setText(str(command_count))
+
+    def _emit_feedback_requested(self):
+        self.feedback_requested.emit(self.get_feedback_values())
+
+    def _emit_design_changed(self):
+        self.design_changed.emit(self.get_specs())
     
     def get_specs(self) -> dict:
         """Get current design specifications
@@ -100,11 +202,20 @@ class DesignPanel(QWidget):
             Dictionary with design specs
         """
         return {
-            "antenna_family": self.antenna_combo.currentText().lower(),
+            "antenna_family": self.antenna_combo.currentText(),
             "frequency_ghz": self.freq_spin.value(),
             "bandwidth_mhz": self.bw_spin.value(),
             "constraints": {
                 "max_vswr": self.vswr_spin.value(),
                 "target_gain_dbi": self.gain_spin.value()
             }
+        }
+
+    def get_feedback_values(self) -> dict:
+        """Collect CST feedback values from the panel."""
+        return {
+            "actual_center_frequency_ghz": self.fb_freq_spin.value(),
+            "actual_bandwidth_mhz": self.fb_bw_spin.value(),
+            "actual_vswr": self.fb_vswr_spin.value(),
+            "actual_gain_dbi": self.fb_gain_spin.value(),
         }

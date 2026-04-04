@@ -1,15 +1,13 @@
-"""
-ExecutionEngine - Orchestrate command execution
+"""Execute current server command packages in preparation or live mode."""
 
-Responsible for:
-- Execute commands sequentially
-- Track execution state
-- Handle errors and failures
-- Manage pause/resume
-"""
+from __future__ import annotations
 
 import asyncio
-from typing import Dict, List, Any, Optional
+import json
+from pathlib import Path
+from typing import Dict, List, Any
+
+from cst.cst_app import CSTApp
 from executor.command_parser import CommandPackage, Command
 from executor.vba_generator import VBAGenerator
 from utils.logger import get_logger
@@ -21,11 +19,12 @@ logger = get_logger(__name__)
 class ExecutionResult:
     """Result of command execution"""
     
-    def __init__(self, command_id: str, success: bool, output: str = "", error: str = ""):
+    def __init__(self, command_id: str, success: bool, output: str = "", error: str = "", macro: str = ""):
         self.command_id = command_id
         self.success = success
         self.output = output
         self.error = error
+        self.macro = macro
         self.timestamp = None
     
     def to_dict(self) -> Dict[str, Any]:
@@ -35,6 +34,7 @@ class ExecutionResult:
             "success": self.success,
             "output": self.output,
             "error": self.error,
+            "macro": self.macro,
             "timestamp": self.timestamp
         }
 
@@ -48,6 +48,8 @@ class ExecutionEngine:
         self.current_execution = None
         self.paused = False
         self.results: List[ExecutionResult] = []
+        self.cst_app = CSTApp()
+        self.dry_run = True
         logger.info("ExecutionEngine initialized")
     
     async def execute_command_package(self, package: CommandPackage) -> List[ExecutionResult]:
@@ -63,6 +65,7 @@ class ExecutionEngine:
             RuntimeError: If execution fails
         """
         self.results = []
+        self.dry_run = not self.cst_app.connect()
         logger.info(f"Starting execution of package with {len(package.commands)} commands")
         
         for i, command in enumerate(package.commands):
@@ -73,16 +76,25 @@ class ExecutionEngine:
                     await asyncio.sleep(0.5)
             
             try:
-                logger.info(f"Executing command {i+1}/{len(package.commands)}: {command.id} ({command.type})")
+                logger.info(
+                    f"Executing command {i+1}/{len(package.commands)}: "
+                    f"{command.seq}:{command.command}"
+                )
                 result = await self._execute_command(command)
                 self.results.append(result)
-                
+
+                if not result.success and command.on_failure == "retry_once":
+                    logger.warning(f"Retrying command {command.seq}:{command.command} once")
+                    retry_result = await self._execute_command(command)
+                    self.results.append(retry_result)
+                    result = retry_result
+
                 if not result.success and command.on_failure == "abort":
-                    logger.error(f"Command {command.id} failed, aborting execution")
+                    logger.error(f"Command {command.seq}:{command.command} failed, aborting execution")
                     break
             except Exception as e:
-                logger.exception(f"Exception executing command {command.id}: {e}")
-                result = ExecutionResult(command.id, False, error=str(e))
+                logger.exception(f"Exception executing command {command.seq}:{command.command}: {e}")
+                result = ExecutionResult(f"{command.seq}:{command.command}", False, error=str(e))
                 self.results.append(result)
                 break
         
@@ -100,25 +112,41 @@ class ExecutionEngine:
         """
         try:
             # Generate VBA for command
-            vba_code = self.vba_generator.generate_macro(command.type, command.parameters)
-            
-            # TODO: Inject and execute VBA via CST COM interface
-            # For now, simulate execution
+            vba_code = self.vba_generator.generate_macro(command.command, command.params)
+
+            artifacts_dir = Path("artifacts") / "vba"
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
+            macro_path = artifacts_dir / f"{command.seq:02d}_{command.command}.bas"
+            macro_path.write_text(vba_code, encoding="utf-8")
+
+            # Best-effort execution path. Existing CST COM integration remains partial,
+            # so the engine transparently falls back to dry-run preparation mode.
+            if not self.dry_run:
+                executed = self.cst_app.execute_macro(vba_code)
+                if not executed:
+                    logger.warning(
+                        f"CST COM execution unavailable for {command.seq}:{command.command}; "
+                        "continuing in dry-run preparation mode"
+                    )
+                    self.dry_run = True
+
             await asyncio.sleep(0.1)
-            
+            mode = "prepared" if self.dry_run else "executed"
             result = ExecutionResult(
-                command.id,
+                f"{command.seq}:{command.command}",
                 success=True,
-                output=f"Executed {command.type} successfully"
+                output=f"{mode.capitalize()} {command.command} successfully",
+                macro=vba_code,
             )
-            logger.debug(f"Command {command.id} execution successful")
+            logger.debug(f"Command {command.seq}:{command.command} execution successful")
             return result
         except Exception as e:
-            logger.error(f"Command {command.id} execution failed: {e}")
+            logger.error(f"Command {command.seq}:{command.command} execution failed: {e}")
             return ExecutionResult(
-                command.id,
+                f"{command.seq}:{command.command}",
                 success=False,
-                error=str(e)
+                error=str(e),
+                macro=vba_code if 'vba_code' in locals() else "",
             )
     
     def pause_execution(self) -> None:
@@ -145,7 +173,8 @@ class ExecutionEngine:
             "completed": completed,
             "failed": sum(1 for r in self.results if not r.success),
             "in_progress": False,
-            "paused": self.paused
+            "paused": self.paused,
+            "dry_run": self.dry_run,
         }
     
     def get_results(self) -> List[Dict[str, Any]]:

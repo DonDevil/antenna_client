@@ -1,14 +1,9 @@
-"""
-VBAGenerator - Convert high-level commands to VBA macros
+"""Convert current server commands into CST-oriented VBA snippets."""
 
-Responsible for:
-- Template-based VBA generation
-- Parameter substitution
-- Error handling macros
-- Macro validation
-"""
+from __future__ import annotations
 
 from typing import Dict, Any, List
+
 from utils.logger import get_logger
 
 
@@ -17,58 +12,6 @@ logger = get_logger(__name__)
 
 class VBAGenerator:
     """Generate VBA macro code from commands"""
-    
-    # Simple VBA templates for each command type
-    TEMPLATES = {
-        "create_project": """
-Set objCST = CreateObject("CSTStudio.Application")
-objCST.NewMWS {name}
-""",
-        "set_units": """
-objMWS.Unit("{units}")
-""",
-        "set_frequency_range": """
-objMWS.Frequency({freq_start}, {freq_stop})
-""",
-        "define_material": """
-With objMWS.Material("{material_name}")
-    .Epsilon = {epsilon}
-    .TanDelta = {tan_delta}
-End With
-""",
-        "create_substrate": """
-With objMWS.Component("Substrate")
-    .Width = {width}
-    .Length = {length}
-    .Height = {height}
-    .Material = "{material}"
-End With
-""",
-        "create_patch": """
-With objMWS.Component("Patch")
-    .Width = {width}
-    .Length = {length}
-    .Height = {height}
-    .Material = "{material}"
-    .XPos = {x_pos}
-    .YPos = {y_pos}
-    .ZPos = {z_pos}
-End With
-""",
-        "create_port": """
-With objMWS.Port("{port_name}")
-    .Type = "{port_type}"
-    .XPos = {x_pos}
-    .YPos = {y_pos}
-    .ZPos = {z_pos}
-    .Impedance = {impedance}
-End With
-""",
-        "run_solver": """
-objMWS.Solver.FrequencyRange("{freq_start}", "{freq_stop}")
-objMWS.Solver.Run
-"""
-    }
     
     def generate_macro(self, command_type: str, parameters: Dict[str, Any]) -> str:
         """Generate VBA macro for command
@@ -83,19 +26,184 @@ objMWS.Solver.Run
         Raises:
             ValueError: If command type not supported
         """
-        if command_type not in self.TEMPLATES:
+        dispatch = {
+            "create_project": self._create_project,
+            "set_units": self._set_units,
+            "set_frequency_range": self._set_frequency_range,
+            "define_material": self._define_material,
+            "create_substrate": self._create_substrate,
+            "create_ground_plane": self._create_ground_plane,
+            "create_patch": self._create_patch,
+            "create_feedline": self._create_feedline,
+            "create_port": self._create_port,
+            "set_boundary": self._set_boundary,
+            "set_solver": self._set_solver,
+            "run_simulation": self._run_simulation,
+            "export_s_parameters": self._export_s_parameters,
+            "extract_summary_metrics": self._extract_summary_metrics,
+            "export_farfield": self._export_farfield,
+        }
+        handler = dispatch.get(command_type)
+        if handler is None:
             raise ValueError(f"Unsupported command type: {command_type}")
-        
-        template = self.TEMPLATES[command_type]
-        
-        try:
-            # Substitute parameters into template
-            macro_code = template.format(**parameters)
-            logger.debug(f"Generated macro for {command_type}")
-            return macro_code
-        except KeyError as e:
-            logger.error(f"Missing parameter for {command_type}: {e}")
-            raise ValueError(f"Missing required parameter: {e}")
+        macro_code = handler(parameters)
+        logger.debug(f"Generated macro for {command_type}")
+        return macro_code
+
+    @staticmethod
+    def _brick(name: str, material: str, x_min: float, x_max: float, y_min: float, y_max: float, z_min: float, z_max: float) -> str:
+        return f"""
+With Brick
+    .Reset
+    .Name \"{name}\"
+    .Component \"component1\"
+    .Material \"{material}\"
+    .Xmin {x_min}
+    .Xmax {x_max}
+    .Ymin {y_min}
+    .Ymax {y_max}
+    .Zmin {z_min}
+    .Zmax {z_max}
+    .Create
+End With
+""".strip()
+
+    def _create_project(self, parameters: Dict[str, Any]) -> str:
+        return f"' create_project\n' Project Name: {parameters['project_name']}"
+
+    def _set_units(self, parameters: Dict[str, Any]) -> str:
+        return f"""
+With Units
+    .Geometry \"{parameters['geometry']}\"
+    .Frequency \"{parameters['frequency']}\"
+End With
+""".strip()
+
+    def _set_frequency_range(self, parameters: Dict[str, Any]) -> str:
+        return f"Solver.FrequencyRange \"{parameters['start_ghz']}\", \"{parameters['stop_ghz']}\""
+
+    def _define_material(self, parameters: Dict[str, Any]) -> str:
+        name = parameters["name"]
+        kind = parameters["kind"]
+        if kind == "conductor":
+            conductivity = parameters.get("conductivity_s_per_m", 5.8e7)
+            return f"""
+With Material
+    .Reset
+    .Name \"{name}\"
+    .Conductivity \"{conductivity}\"
+    .Create
+End With
+""".strip()
+        epsilon_r = parameters.get("epsilon_r", 4.4)
+        loss_tangent = parameters.get("loss_tangent", 0.02)
+        return f"""
+With Material
+    .Reset
+    .Name \"{name}\"
+    .Epsilon \"{epsilon_r}\"
+    .TanD \"{loss_tangent}\"
+    .Create
+End With
+""".strip()
+
+    def _create_substrate(self, parameters: Dict[str, Any]) -> str:
+        origin = parameters["origin_mm"]
+        x_min = origin["x"] - (parameters["length_mm"] / 2.0)
+        x_max = origin["x"] + (parameters["length_mm"] / 2.0)
+        y_min = origin["y"] - (parameters["width_mm"] / 2.0)
+        y_max = origin["y"] + (parameters["width_mm"] / 2.0)
+        z_min = origin["z"]
+        z_max = origin["z"] + parameters["height_mm"]
+        return self._brick(parameters["name"], parameters["material"], x_min, x_max, y_min, y_max, z_min, z_max)
+
+    def _create_ground_plane(self, parameters: Dict[str, Any]) -> str:
+        x_min = -(parameters["length_mm"] / 2.0)
+        x_max = parameters["length_mm"] / 2.0
+        y_min = -(parameters["width_mm"] / 2.0)
+        y_max = parameters["width_mm"] / 2.0
+        z_min = parameters["z_mm"]
+        z_max = parameters["z_mm"] + parameters["thickness_mm"]
+        return self._brick(parameters["name"], parameters["material"], x_min, x_max, y_min, y_max, z_min, z_max)
+
+    def _create_patch(self, parameters: Dict[str, Any]) -> str:
+        center = parameters["center_mm"]
+        x_min = center["x"] - (parameters["length_mm"] / 2.0)
+        x_max = center["x"] + (parameters["length_mm"] / 2.0)
+        y_min = center["y"] - (parameters["width_mm"] / 2.0)
+        y_max = center["y"] + (parameters["width_mm"] / 2.0)
+        z_min = center["z"]
+        z_max = center["z"] + parameters["thickness_mm"]
+        return self._brick(parameters["name"], parameters["material"], x_min, x_max, y_min, y_max, z_min, z_max)
+
+    def _create_feedline(self, parameters: Dict[str, Any]) -> str:
+        start = parameters["start_mm"]
+        end = parameters["end_mm"]
+        half_width = parameters["width_mm"] / 2.0
+        x_min = min(start["x"], end["x"]) - half_width
+        x_max = max(start["x"], end["x"]) + half_width
+        y_min = min(start["y"], end["y"]) - half_width
+        y_max = max(start["y"], end["y"]) + half_width
+        z_min = start["z"]
+        z_max = start["z"] + parameters["thickness_mm"]
+        return self._brick(parameters["name"], parameters["material"], x_min, x_max, y_min, y_max, z_min, z_max)
+
+    def _create_port(self, parameters: Dict[str, Any]) -> str:
+        ref = parameters["reference_mm"]
+        return f"""
+With Port
+    .Reset
+    .PortNumber {parameters['port_id']}
+    .Label \"port_{parameters['port_id']}\"
+    .PortType \"{parameters['port_type']}\"
+    .Impedance {parameters['impedance_ohm']}
+    .XrangeAdd {ref['x']}
+    .YrangeAdd {ref['y']}
+    .ZrangeAdd {ref['z']}
+    .Create
+End With
+""".strip()
+
+    def _set_boundary(self, parameters: Dict[str, Any]) -> str:
+        return f"""
+With Boundary
+    .Xmin \"{parameters['boundary_type']}\"
+    .Xmax \"{parameters['boundary_type']}\"
+    .Ymin \"{parameters['boundary_type']}\"
+    .Ymax \"{parameters['boundary_type']}\"
+    .Zmin \"{parameters['boundary_type']}\"
+    .Zmax \"{parameters['boundary_type']}\"
+End With
+' padding_mm={parameters['padding_mm']}
+""".strip()
+
+    def _set_solver(self, parameters: Dict[str, Any]) -> str:
+        return f"""
+With Solver
+    .Method \"{parameters['solver_type']}\"
+End With
+' mesh_cells_per_wavelength={parameters['mesh_cells_per_wavelength']}
+""".strip()
+
+    def _run_simulation(self, parameters: Dict[str, Any]) -> str:
+        return f"""
+' run_simulation
+' timeout_sec={parameters['timeout_sec']}
+Solver.Start
+""".strip()
+
+    def _export_s_parameters(self, parameters: Dict[str, Any]) -> str:
+        return f"' export_s_parameters format={parameters['format']} destination_hint={parameters['destination_hint']}"
+
+    def _extract_summary_metrics(self, parameters: Dict[str, Any]) -> str:
+        metrics = ", ".join(parameters.get("metrics", []))
+        return f"' extract_summary_metrics metrics={metrics}"
+
+    def _export_farfield(self, parameters: Dict[str, Any]) -> str:
+        return (
+            f"' export_farfield format={parameters['format']} "
+            f"frequency_ghz={parameters['frequency_ghz']} destination_hint={parameters['destination_hint']}"
+        )
     
     def generate_package_script(self, commands_code: List[str]) -> str:
         """Generate complete VBA script from multiple macros

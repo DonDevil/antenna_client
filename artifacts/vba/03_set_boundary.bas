@@ -1,0 +1,9 @@
+With Boundary
+    .Xmin "open_add_space"
+    .Xmax "open_add_space"
+    .Ymin "open_add_space"
+    .Ymax "open_add_space"
+    .Zmin "open_add_space"
+    .Zmax "open_add_space"
+End With
+' padding_mm=15.0

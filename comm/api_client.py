@@ -1,33 +1,15 @@
-"""
-ApiClient - REST API wrapper for antenna_server
+"""High-level REST API wrapper for the current antenna server."""
 
-Responsible for:
-- High-level API methods
-- Request/response marshalling
-- Schema validation
-- Error handling
-"""
+from __future__ import annotations
 
 from typing import Dict, Any, Optional
-from pydantic import BaseModel, ValidationError
+
+from comm.response_handler import ResponseHandler, OptimizeResponse
 from comm.server_connector import ServerConnector
 from utils.logger import get_logger
 
 
 logger = get_logger(__name__)
-
-
-class OptimizeRequest(BaseModel):
-    """Request schema for optimization endpoint"""
-    user_request: str
-    context: Optional[Dict[str, Any]] = None
-
-
-class OptimizeResponse(BaseModel):
-    """Response schema for optimization endpoint"""
-    status: str
-    command_package: Optional[Dict[str, Any]] = None
-    clarification: Optional[str] = None
 
 
 class ApiClient:
@@ -40,8 +22,9 @@ class ApiClient:
             connector: ServerConnector instance
         """
         self.connector = connector
+        self.response_handler = ResponseHandler()
     
-    async def optimize(self, request: OptimizeRequest) -> OptimizeResponse:
+    async def optimize(self, request: Dict[str, Any]) -> OptimizeResponse:
         """Send optimization request
         
         Args:
@@ -56,11 +39,11 @@ class ApiClient:
         try:
             response_data = await self.connector.post(
                 "/api/v1/optimize",
-                json=request.dict()
+                json=request
             )
-            return OptimizeResponse(**response_data)
-        except ValidationError as e:
-            logger.error(f"Invalid optimize response: {e}")
+            return self.response_handler.parse_optimize_response(response_data)
+        except Exception as e:
+            logger.error(f"Optimize request failed: {e}")
             raise
     
     async def send_feedback(self, feedback: Dict[str, Any]) -> Dict[str, Any]:
@@ -77,31 +60,41 @@ class ApiClient:
             json=feedback
         )
     
-    async def chat(self, message: str, context: Optional[Dict] = None) -> str:
-        """Send chat message
+    async def chat(self, message: str, requirements: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Send chat message for intent capture and assistant guidance.
         
         Args:
             message: User message text
-            context: Conversation context
+            requirements: Current extracted requirements
             
         Returns:
-            Assistant response text
+            Raw chat payload from the server
         """
-        response_data = await self.connector.post(
+        return await self.connector.post(
             "/api/v1/chat",
-            json={"message": message, "context": context or {}}
+            json={"message": message, "requirements": requirements or {}}
         )
-        return response_data.get("response", "")
+
+    async def parse_intent(self, user_request: str) -> Dict[str, Any]:
+        """Ask the server to parse intent without starting optimization."""
+        response_data = await self.connector.post(
+            "/api/v1/intent/parse",
+            json={"user_request": user_request},
+        )
+        return response_data.get("intent_summary", {})
+
+    async def get_session(self, session_id: str) -> Dict[str, Any]:
+        """Fetch current session state from the server."""
+        return await self.connector.get(f"/api/v1/sessions/{session_id}")
+
+    async def load_capabilities(self) -> Dict[str, Any]:
+        """Load capability catalog from the server."""
+        return await self.connector.get("/api/v1/capabilities")
     
-    async def health_check(self) -> bool:
-        """Check server health
+    async def health_check(self) -> Dict[str, Any]:
+        """Check server health and return the health payload.
         
         Returns:
-            True if server is healthy
+            Health payload
         """
-        try:
-            response = await self.connector.get("/api/v1/health")
-            return response.get("status") == "healthy"
-        except Exception as e:
-            logger.debug(f"Health check failed: {e}")
-            return False
+        return await self.connector.get("/api/v1/health")

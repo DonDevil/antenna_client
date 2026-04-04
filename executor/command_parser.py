@@ -1,15 +1,11 @@
-"""
-CommandParser - Parse and validate command packages from server
+"""Parse and validate current cst_command_package.v1 payloads from the server."""
 
-Responsible for:
-- Validate command package structure
-- Extract individual commands
-- Validate command parameters
-- Handle versioning
-"""
+from __future__ import annotations
 
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
+
 from pydantic import BaseModel, ValidationError
+
 from utils.logger import get_logger
 
 
@@ -17,24 +13,36 @@ logger = get_logger(__name__)
 
 
 class Command(BaseModel):
-    """Individual command in package"""
-    id: str
-    type: str  # e.g., "create_project", "set_units", "create_patch"
-    parameters: Dict[str, Any]
-    on_failure: str = "abort"  # abort, skip, retry
+    """Individual command in the server command package."""
+
+    seq: int
+    command: str
+    params: Dict[str, Any]
+    on_failure: str = "abort"
+    checksum_scope: str
 
 
 class CommandPackage(BaseModel):
-    """Command package from server"""
-    package_version: str
+    """Current server command package schema."""
+
+    schema_version: str
+    command_catalog_version: str
+    session_id: str
+    trace_id: str
+    design_id: str
+    iteration_index: int
+    units: Dict[str, Any]
+    predicted_dimensions: Dict[str, Any]
+    predicted_metrics: Optional[Dict[str, Any]] = None
     commands: List[Command]
-    policy: Dict[str, Any] = {}  # execution policy
+    expected_exports: List[str]
+    safety_checks: List[str]
 
 
 class CommandParser:
     """Parse and validate command packages"""
     
-    SUPPORTED_VERSION = "1.0"
+    SUPPORTED_SCHEMA_VERSION = "cst_command_package.v1"
     
     def parse_package(self, package_data: Dict[str, Any]) -> CommandPackage:
         """Parse command package
@@ -50,7 +58,10 @@ class CommandParser:
         """
         try:
             package = CommandPackage(**package_data)
-            logger.info(f"Parsed command package v{package.package_version} with {len(package.commands)} commands")
+            logger.info(
+                f"Parsed command package {package.schema_version} "
+                f"with {len(package.commands)} commands"
+            )
             return package
         except ValidationError as e:
             logger.error(f"Command package validation failed: {e}")
@@ -69,10 +80,10 @@ class CommandParser:
             ValueError: If package is invalid
         """
         # Check version compatibility
-        if package.package_version != self.SUPPORTED_VERSION:
+        if package.schema_version != self.SUPPORTED_SCHEMA_VERSION:
             raise ValueError(
-                f"Unsupported package version: {package.package_version} "
-                f"(supported: {self.SUPPORTED_VERSION})"
+                f"Unsupported package version: {package.schema_version} "
+                f"(supported: {self.SUPPORTED_SCHEMA_VERSION})"
             )
         
         # Check commands are not empty
@@ -80,13 +91,15 @@ class CommandParser:
             raise ValueError("Package contains no commands")
         
         # Validate each command
+        previous_seq = 0
         for cmd in package.commands:
-            if not cmd.id:
-                raise ValueError("Command missing ID")
-            if not cmd.type:
-                raise ValueError(f"Command {cmd.id} missing type")
-            if not cmd.parameters:
-                raise ValueError(f"Command {cmd.id} missing parameters")
+            if cmd.seq <= previous_seq:
+                raise ValueError("Command sequence must be strictly increasing")
+            previous_seq = cmd.seq
+            if not cmd.command:
+                raise ValueError(f"Command {cmd.seq} missing command name")
+            if not isinstance(cmd.params, dict):
+                raise ValueError(f"Command {cmd.seq} has invalid params payload")
         
         logger.info(f"Package validation successful: {len(package.commands)} commands valid")
         return True
@@ -105,7 +118,7 @@ class CommandParser:
             ValueError: If command not found
         """
         for cmd in package.commands:
-            if cmd.id == command_id:
+            if f"{cmd.seq}:{cmd.command}" == command_id:
                 return cmd
         
         raise ValueError(f"Command {command_id} not found in package")
@@ -119,7 +132,7 @@ class CommandParser:
         Returns:
             List of commands in order
         """
-        return package.commands  # Already in order from server
+        return sorted(package.commands, key=lambda cmd: cmd.seq)
 
 
 class CommandValidator:
