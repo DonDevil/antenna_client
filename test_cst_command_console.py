@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import platform
+import re
 from pathlib import Path
 from typing import Any
 
@@ -79,10 +80,12 @@ DEFAULT_PARAMS: dict[str, dict[str, Any]] = {
         "port_id": 1,
         "port_type": "discrete",
         "impedance_ohm": 50.0,
-        "reference_mm": {"x": 0.0, "y": 0.0, "z": 0.0},
+        "p1_mm": {"x": 0.0, "y": -22.0, "z": 1.6},
+        "p2_mm": {"x": 0.0, "y": -22.0, "z": 0.0},
     },
     "set_boundary": {"boundary_type": "open_add_space", "padding_mm": 15.0},
     "set_solver": {"solver_type": "time_domain", "mesh_cells_per_wavelength": 20},
+    "add_farfield_monitor": {"frequency_ghz": 2.4, "name": "farfield_2p4ghz"},
     "run_simulation": {"timeout_sec": 600},
     "export_s_parameters": {"format": "json", "destination_hint": "s11"},
     "extract_summary_metrics": {
@@ -110,6 +113,7 @@ SUPPORTED_COMMANDS = [
     "create_port",
     "set_boundary",
     "set_solver",
+    "add_farfield_monitor",
     "run_simulation",
     "export_s_parameters",
     "extract_summary_metrics",
@@ -143,6 +147,23 @@ class CSTCommandConsole:
         self.project_dir = Path(configured_project_dir) if configured_project_dir else (Path.cwd() / "artifacts")
         self.project_dir.mkdir(parents=True, exist_ok=True)
         self._history_counter = 0
+        self.last_sparam_export: str | None = None
+        self.last_farfield_export: str | None = None
+
+    @staticmethod
+    def _parse_frequency_ghz_from_item(item: str) -> float | None:
+        match = re.search(r"(?:f\s*=\s*)?([0-9]+(?:\.[0-9]+)?)\s*(ghz|mhz|khz|hz)?", item, flags=re.IGNORECASE)
+        if not match:
+            return None
+        value = float(match.group(1))
+        unit = (match.group(2) or "ghz").lower()
+        if unit == "ghz":
+            return value
+        if unit == "mhz":
+            return value / 1_000.0
+        if unit == "khz":
+            return value / 1_000_000.0
+        return value / 1_000_000_000.0
 
     def refresh_project(self) -> None:
         if self.design_env is None:
@@ -190,8 +211,15 @@ class CSTCommandConsole:
             raise RuntimeError("CST project handle became unavailable. Recreate or reopen the project.")
         self._history_counter += 1
         history_title = f"{title}_{self._history_counter:03d}"
-        self.mws.add_to_history(history_title, code)
-        self.mws.full_history_rebuild()
+        try:
+            self.mws.add_to_history(history_title, code)
+            self.mws.full_history_rebuild()
+        except Exception as exc:
+            msg = str(exc).lower()
+            if title == "define_material" and "already exists" in msg:
+                print("Material already exists; continuing without redefinition.")
+                return
+            raise
         self.refresh_project()
 
     def merge_params(self, command: str, user_params: dict[str, Any]) -> dict[str, Any]:
@@ -210,6 +238,212 @@ class CSTCommandConsole:
             code = str(user_params.get("code", "' raw vba test"))
             self.run_vba(title, code)
             print("Raw VBA executed.")
+            return
+
+        if command == "run_simulation":
+            if self.mws is None:
+                raise RuntimeError("No active CST project. Run create_project first.")
+            params = self.merge_params(command, user_params)
+            timeout = int(params.get("timeout_sec", 600))
+            self.refresh_project()
+            try:
+                self.mws.run_solver(timeout=timeout)
+            except Exception as exc:
+                raise RuntimeError(
+                    "Simulation failed. Check excitation/port placement and boundary setup. "
+                    f"CST error: {exc}"
+                ) from exc
+            self.refresh_project()
+            print("Simulation completed.")
+            return
+
+        if command == "export_s_parameters":
+            if self.mws is None:
+                raise RuntimeError("No active CST project. Run create_project first.")
+            params = self.merge_params(command, user_params)
+            hint = str(params.get("destination_hint", "s11"))
+            export_path = (Path("artifacts") / "exports" / f"{hint}.txt").resolve()
+            export_path.parent.mkdir(parents=True, exist_ok=True)
+
+            candidates = []
+            try:
+                items = list(self.mws.get_tree_items())
+                exact = [item for item in items if item.startswith("1D Results\\S-Parameters\\")]
+                if exact:
+                    candidates.extend(exact)
+                else:
+                    candidates.extend([
+                        r"1D Results\\S-Parameters\\S1,1",
+                        r"1D Results\\S-Parameters\\S(1,1)",
+                        r"1D Results\\S-Parameters\\SZmax(1),Zmax(1)",
+                    ])
+            except Exception:
+                candidates.extend([
+                    r"1D Results\\S-Parameters\\S1,1",
+                    r"1D Results\\S-Parameters\\S(1,1)",
+                    r"1D Results\\S-Parameters\\SZmax(1),Zmax(1)",
+                ])
+
+            exported = False
+            for item in candidates:
+                try:
+                    self.mws.SelectTreeItem(item)
+                    self.mws.StoreCurvesInASCIIFile(str(export_path))
+                    if export_path.exists():
+                        exported = True
+                        break
+                except Exception:
+                    continue
+
+            if not exported:
+                raise RuntimeError(
+                    "Unable to export S-parameters. "
+                    f"Checked tree items: {candidates}. "
+                    "Simulation may not have produced S-parameter curves."
+                )
+
+            self.last_sparam_export = str(export_path)
+            print(f"Exported S-parameters: {export_path}")
+            return
+
+        if command == "extract_summary_metrics":
+            params = self.merge_params(command, user_params)
+            _ = params.get("metrics", [])
+            if not self.last_sparam_export:
+                raise RuntimeError("No exported S-parameter file found. Run export_s_parameters first.")
+
+            path = Path(self.last_sparam_export)
+            if not path.exists():
+                raise RuntimeError(f"S-parameter export missing: {path}")
+
+            freq = []
+            s11_db = []
+            for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#") or line.startswith("!"):
+                    continue
+                parts = [p for p in line.replace(",", " ").split() if p]
+                if len(parts) < 2:
+                    continue
+                try:
+                    freq.append(float(parts[0]))
+                    s11_db.append(float(parts[1]))
+                except ValueError:
+                    continue
+
+            if not freq:
+                raise RuntimeError("Unable to parse numeric S-parameter data from export file.")
+
+            min_idx = min(range(len(s11_db)), key=lambda i: s11_db[i])
+            center = freq[min_idx]
+            threshold = -10.0
+            band_idx = [i for i, v in enumerate(s11_db) if v <= threshold]
+            if len(band_idx) >= 2:
+                start = freq[band_idx[0]]
+                stop = freq[band_idx[-1]]
+                bw = max(stop - start, 0.0)
+            else:
+                start = stop = center
+                bw = 0.0
+
+            metrics = {
+                "center_frequency": center,
+                "bandwidth": bw,
+                "min_s11_db": s11_db[min_idx],
+                "start_freq": start,
+                "stop_freq": stop,
+            }
+            metrics_path = (Path("artifacts") / "exports" / "summary_metrics.json").resolve()
+            metrics_path.parent.mkdir(parents=True, exist_ok=True)
+            metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+            print(f"Extracted metrics: {metrics}")
+            print(f"Saved metrics to: {metrics_path}")
+            return
+
+        if command == "export_farfield":
+            if self.mws is None:
+                raise RuntimeError("No active CST project. Run create_project first.")
+
+            params = self.merge_params(command, user_params)
+            hint = str(params.get("destination_hint", "farfield"))
+            frequency_ghz = float(params.get("frequency_ghz", 2.4))
+            export_path = (Path("artifacts") / "exports" / f"{hint}.txt").resolve()
+            summary_path = (Path("artifacts") / "exports" / f"{hint}_summary.txt").resolve()
+            cut_path = (Path("artifacts") / "exports" / f"{hint}_theta_cut.txt").resolve()
+            meta_path = (Path("artifacts") / "exports" / f"{hint}_meta.json").resolve()
+            export_path.parent.mkdir(parents=True, exist_ok=True)
+
+            candidates = []
+            try:
+                items = list(self.mws.get_tree_items())
+                farfield_items = [
+                    item for item in items if "farfield" in item.lower() and ("\\" in item or "/" in item)
+                ]
+                ranked = []
+                for item in farfield_items:
+                    parsed = self._parse_frequency_ghz_from_item(item)
+                    score = abs(parsed - frequency_ghz) if parsed is not None else 1e9
+                    ranked.append((score, item))
+                ranked.sort(key=lambda x: x[0])
+                candidates = [item for _, item in ranked]
+            except Exception:
+                candidates = []
+
+            if not candidates:
+                candidates = [
+                    fr"Farfields\\farfield (f={frequency_ghz}GHz)",
+                    fr"2D/3D Results\\Farfields\\farfield (f={frequency_ghz}GHz)",
+                    r"Farfields\\farfield",
+                ]
+
+            exported = False
+            chosen_item = None
+            for item in candidates:
+                try:
+                    self.mws.SelectTreeItem(item)
+                    farfield_plot = self.mws.FarfieldPlot
+                    farfield_plot.SetFrequency(str(frequency_ghz))
+                    farfield_plot.ASCIIExportSummary(str(summary_path))
+                    farfield_plot.ASCIIExportAsSource(str(export_path))
+                    farfield_plot.SetPlotMode("directivity")
+                    farfield_plot.Vary("theta")
+                    farfield_plot.Phi("0")
+                    farfield_plot.Step("5")
+                    farfield_plot.Plot()
+                    cut_name = f"{hint}_theta_cut"
+                    farfield_plot.CopyFarfieldTo1DResults(r"1D Results\Farfields", cut_name)
+                    self.mws.SelectTreeItem(rf"1D Results\1D Results\Farfields\{cut_name}")
+                    self.mws.StoreCurvesInASCIIFile(str(cut_path))
+                    if export_path.exists() and export_path.stat().st_size > 0:
+                        exported = True
+                        chosen_item = item
+                        break
+                except Exception:
+                    continue
+
+            if not exported:
+                raise RuntimeError(
+                    "Unable to export far-field data. "
+                    f"Checked tree items: {candidates}. "
+                    "Ensure a far-field monitor exists and simulation has completed for the requested frequency."
+                )
+
+            meta_path.write_text(
+                json.dumps(
+                    {
+                        "requested_frequency_ghz": frequency_ghz,
+                        "selected_tree_item": chosen_item,
+                        "export_path": str(export_path),
+                        "summary_export_path": str(summary_path),
+                        "theta_cut_export_path": str(cut_path),
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            self.last_farfield_export = str(export_path)
+            print(f"Exported far-field data: {export_path}")
             return
 
         params = self.merge_params(command, user_params)

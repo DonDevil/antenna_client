@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import platform
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -54,6 +55,12 @@ class CSTApp:
             self._sync_project_handles()
         except Exception as exc:
             logger.debug(f"Failed to refresh active CST project handle: {exc}")
+
+    def _resolve_artifact_path(self, destination_hint: str, extension: str) -> Path:
+        safe_hint = "_".join(str(destination_hint).strip().split()) or "artifact"
+        artifacts_dir = Path("artifacts") / "exports"
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        return artifacts_dir / f"{safe_hint}.{extension.lstrip('.')}"
     
     def connect(self) -> bool:
         """Connect to a running CST design environment or create one."""
@@ -125,14 +132,217 @@ class CSTApp:
                 return False
             self._history_counter += 1
             history_title = f"{title}_{self._history_counter:03d}"
-            self.mws.add_to_history(history_title, macro_code)
-            self.mws.full_history_rebuild()
+            try:
+                self.mws.add_to_history(history_title, macro_code)
+                self.mws.full_history_rebuild()
+            except Exception as exc:
+                msg = str(exc).lower()
+                if title == "define_material" and "already exists" in msg:
+                    logger.info("Material already exists; skipping redefinition")
+                    return True
+                raise
             self._refresh_active_project()
             logger.debug(f"Macro executed via CST history: {history_title}")
             return True
         except Exception as e:
             logger.error(f"Failed to execute macro: {e}")
             return False
+
+    def run_simulation(self, timeout_sec: int = 600) -> bool:
+        """Run solver using CST's model3d API."""
+        self._refresh_active_project()
+        if not self.mws:
+            logger.error("No active project")
+            return False
+        try:
+            timeout = int(timeout_sec) if timeout_sec else None
+            self.mws.run_solver(timeout=timeout)
+            self._refresh_active_project()
+            return True
+        except Exception as exc:
+            logger.error(f"Failed to run simulation: {exc}")
+            return False
+
+    def export_s_parameters(self, destination_hint: str = "s11") -> Optional[str]:
+        """Export S-parameter 1D curve to ASCII from common result tree locations."""
+        self._refresh_active_project()
+        if not self.mws:
+            logger.error("No active project")
+            return None
+
+        export_path = self._resolve_artifact_path(destination_hint, "txt")
+        candidates = []
+        try:
+            tree_items = list(self.mws.get_tree_items())
+            exact = [item for item in tree_items if item.startswith("1D Results\\S-Parameters\\")]
+            if exact:
+                candidates.extend(exact)
+            else:
+                # Fallback to historical names if tree listing is sparse
+                candidates.extend([
+                    r"1D Results\\S-Parameters\\S1,1",
+                    r"1D Results\\S-Parameters\\S(1,1)",
+                    r"1D Results\\S-Parameters\\SZmax(1),Zmax(1)",
+                ])
+        except Exception:
+            candidates.extend([
+                r"1D Results\\S-Parameters\\S1,1",
+                r"1D Results\\S-Parameters\\S(1,1)",
+                r"1D Results\\S-Parameters\\SZmax(1),Zmax(1)",
+            ])
+
+        for item in candidates:
+            try:
+                self.mws.SelectTreeItem(item)
+                self.mws.StoreCurvesInASCIIFile(str(export_path.resolve()))
+                if export_path.exists():
+                    logger.info(f"Exported S-parameters to {export_path}")
+                    return str(export_path.resolve())
+            except Exception:
+                continue
+
+        logger.error(f"Failed to export S-parameters from candidate items: {candidates}")
+        return None
+
+    @staticmethod
+    def _parse_frequency_ghz_from_item(item: str) -> Optional[float]:
+        match = re.search(r"(?:f\s*=\s*)?([0-9]+(?:\.[0-9]+)?)\s*(ghz|mhz|khz|hz)?", item, flags=re.IGNORECASE)
+        if not match:
+            return None
+        value = float(match.group(1))
+        unit = (match.group(2) or "ghz").lower()
+        if unit == "ghz":
+            return value
+        if unit == "mhz":
+            return value / 1_000.0
+        if unit == "khz":
+            return value / 1_000_000.0
+        return value / 1_000_000_000.0
+
+    def export_farfield(self, frequency_ghz: float = 2.4, destination_hint: str = "farfield") -> Optional[str]:
+        """Export far-field artifacts using CST's dedicated FarfieldPlot API."""
+        self._refresh_active_project()
+        if not self.mws:
+            logger.error("No active project")
+            return None
+
+        source_path = self._resolve_artifact_path(destination_hint, "txt")
+        summary_path = self._resolve_artifact_path(f"{destination_hint}_summary", "txt")
+        cut_path = self._resolve_artifact_path(f"{destination_hint}_theta_cut", "txt")
+        metadata_path = self._resolve_artifact_path(f"{destination_hint}_meta", "json")
+
+        try:
+            tree_items = list(self.mws.get_tree_items())
+        except Exception as exc:
+            logger.error(f"Unable to enumerate CST tree items for far-field export: {exc}")
+            tree_items = []
+
+        farfield_items = [
+            item
+            for item in tree_items
+            if "farfield" in item.lower() and ("\\" in item or "/" in item)
+        ]
+        ranked: list[tuple[float, str]] = []
+        for item in farfield_items:
+            parsed = self._parse_frequency_ghz_from_item(item)
+            score = abs(parsed - frequency_ghz) if parsed is not None else 1e9
+            ranked.append((score, item))
+        ranked.sort(key=lambda x: x[0])
+
+        candidates = [item for _, item in ranked]
+        if not candidates:
+            candidates = [
+                fr"Farfields\\farfield (f={frequency_ghz}GHz)",
+                fr"2D/3D Results\\Farfields\\farfield (f={frequency_ghz}GHz)",
+                r"Farfields\\farfield",
+            ]
+
+        for item in candidates:
+            try:
+                self.mws.SelectTreeItem(item)
+                farfield_plot = self.mws.FarfieldPlot
+                farfield_plot.SetFrequency(str(frequency_ghz))
+                farfield_plot.ASCIIExportSummary(str(summary_path.resolve()))
+                farfield_plot.ASCIIExportAsSource(str(source_path.resolve()))
+                farfield_plot.SetPlotMode("directivity")
+                farfield_plot.Vary("theta")
+                farfield_plot.Phi("0")
+                farfield_plot.Step("5")
+                farfield_plot.Plot()
+                cut_name = f"{destination_hint}_theta_cut"
+                farfield_plot.CopyFarfieldTo1DResults(r"1D Results\Farfields", cut_name)
+                cut_tree_item = rf"1D Results\1D Results\Farfields\{cut_name}"
+                self.mws.SelectTreeItem(cut_tree_item)
+                self.mws.StoreCurvesInASCIIFile(str(cut_path.resolve()))
+
+                if source_path.exists() and source_path.stat().st_size > 0:
+                    metadata = {
+                        "requested_frequency_ghz": frequency_ghz,
+                        "selected_tree_item": item,
+                        "source_export_path": str(source_path.resolve()),
+                        "summary_export_path": str(summary_path.resolve()),
+                        "theta_cut_export_path": str(cut_path.resolve()),
+                    }
+                    metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+                    logger.info(f"Exported far-field data to {source_path} from {item}")
+                    return str(source_path.resolve())
+            except Exception:
+                continue
+
+        logger.error(
+            "Failed to export far-field data. "
+            f"Candidates checked: {candidates}. "
+            "Ensure a far-field monitor exists and simulation has completed."
+        )
+        return None
+
+    @staticmethod
+    def extract_summary_metrics(sparam_file: str) -> Optional[dict]:
+        """Extract basic metrics from ASCII S-parameter export."""
+        path = Path(sparam_file)
+        if not path.exists():
+            return None
+
+        freq = []
+        s11_db = []
+        for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or line.startswith("!"):
+                continue
+            parts = [p for p in line.replace(",", " ").split() if p]
+            if len(parts) < 2:
+                continue
+            try:
+                f = float(parts[0])
+                v = float(parts[1])
+            except ValueError:
+                continue
+            freq.append(f)
+            s11_db.append(v)
+
+        if not freq:
+            return None
+
+        min_idx = min(range(len(s11_db)), key=lambda i: s11_db[i])
+        center = freq[min_idx]
+
+        threshold = -10.0
+        in_band = [i for i, value in enumerate(s11_db) if value <= threshold]
+        if len(in_band) >= 2:
+            start = freq[in_band[0]]
+            stop = freq[in_band[-1]]
+            bandwidth = max(stop - start, 0.0)
+        else:
+            start = stop = center
+            bandwidth = 0.0
+
+        return {
+            "center_frequency": center,
+            "bandwidth": bandwidth,
+            "min_s11_db": s11_db[min_idx],
+            "start_freq": start,
+            "stop_freq": stop,
+        }
     
     def get_project_path(self) -> Optional[str]:
         """Get the currently open CST project path."""

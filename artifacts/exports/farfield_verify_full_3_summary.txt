@@ -1,0 +1,17 @@
+Farfield Summary
+---------------------
+Array pattern: Single antenna
+Monitor name: ff_2p4 [1]
+Plot mode: Directivity
+Component: Abs
+Plot type: 2D
+Step angle Theta: 5
+Step angle Phi  : 5
+Coordinates: Spherical
+Polarization: Abs
+Frequency : 2.4 GHz
+Radiation efficiency: -1.41043 dB 
+Total efficiency: -18.3425 dB
+Maximum directivity [dB]: 6.55717
+Maximum gain [dB]: 5.14674
+Maximum realized gain [dB]: -11.7853

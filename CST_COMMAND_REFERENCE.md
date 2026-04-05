@@ -272,18 +272,20 @@ Create excitation port.
 Usage:
 ```text
 create_port
-create_port {"port_id": 1, "port_type": "discrete", "impedance_ohm": 50.0, "reference_mm": {"x": 0.0, "y": 0.0, "z": 0.0}}
+create_port {"port_id": 1, "port_type": "discrete", "impedance_ohm": 50.0, "p1_mm": {"x": 0.0, "y": -22.0, "z": 1.6}, "p2_mm": {"x": 0.0, "y": -22.0, "z": 0.0}}
 ```
 
 Options:
 - `port_id` (integer)
 - `port_type` (string): typically `discrete`
 - `impedance_ohm` (number)
-- `reference_mm` (object): `x`, `y`, `z`
+- `p1_mm` (object): port start point `x`, `y`, `z`
+- `p2_mm` (object): port end point `x`, `y`, `z`
+- `reference_mm` (object): fallback shorthand if `p1_mm` is omitted
 
 Default:
 ```json
-{"port_id": 1, "port_type": "discrete", "impedance_ohm": 50.0, "reference_mm": {"x": 0.0, "y": 0.0, "z": 0.0}}
+{"port_id": 1, "port_type": "discrete", "impedance_ohm": 50.0, "p1_mm": {"x": 0.0, "y": -22.0, "z": 1.6}, "p2_mm": {"x": 0.0, "y": -22.0, "z": 0.0}}
 ```
 
 ---
@@ -349,6 +351,26 @@ Default:
 
 ---
 
+### add_farfield_monitor
+Add a frequency-domain far-field monitor.
+
+Usage:
+```text
+add_farfield_monitor
+add_farfield_monitor {"frequency_ghz": 2.4, "name": "farfield_2p4ghz"}
+```
+
+Options:
+- `frequency_ghz` (number): monitor frequency in GHz.
+- `name` (string): monitor label.
+
+Default:
+```json
+{"frequency_ghz": 2.4, "name": "farfield_2p4ghz"}
+```
+
+---
+
 ## Export/Metrics Commands
 
 ### export_s_parameters
@@ -391,7 +413,7 @@ Default:
 ---
 
 ### export_farfield
-Request farfield export.
+Export far-field data from CST result tree.
 
 Usage:
 ```text
@@ -403,6 +425,15 @@ Options:
 - `format` (string)
 - `frequency_ghz` (number)
 - `destination_hint` (string)
+
+Behavior:
+- Scans CST tree items for far-field results.
+- Prefers the item closest to `frequency_ghz` when multiple far-field entries are available.
+- Uses CST `FarfieldPlot` export routines after selecting the result item.
+- Writes far-field source data to `artifacts/exports/<destination_hint>.txt`.
+- Writes a summary report to `artifacts/exports/<destination_hint>_summary.txt`.
+- Writes a theta cut to `artifacts/exports/<destination_hint>_theta_cut.txt`.
+- Writes metadata to `artifacts/exports/<destination_hint>_meta.json`.
 
 Default:
 ```json
@@ -452,6 +483,7 @@ create_port
 
 set_boundary
 set_solver
+add_farfield_monitor
 run_simulation
 
 export_s_parameters

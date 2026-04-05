@@ -38,6 +38,7 @@ class VBAGenerator:
             "create_port": self._create_port,
             "set_boundary": self._set_boundary,
             "set_solver": self._set_solver,
+            "add_farfield_monitor": self._add_farfield_monitor,
             "run_simulation": self._run_simulation,
             "export_s_parameters": self._export_s_parameters,
             "extract_summary_metrics": self._extract_summary_metrics,
@@ -163,8 +164,8 @@ With DiscretePort
     .Label \"port_{parameters['port_id']}\"
     .Type \"SParameter\"
     .Impedance \"{parameters['impedance_ohm']}\"
-    .SetP1 \"{p1['x']}\", \"{p1['y']}\", \"{p1['z']}\"
-    .SetP2 \"{p2['x']}\", \"{p2['y']}\", \"{p2['z']}\"
+    .SetP1 \"False\", \"{p1['x']}\", \"{p1['y']}\", \"{p1['z']}\"
+    .SetP2 \"False\", \"{p2['x']}\", \"{p2['y']}\", \"{p2['z']}\"
     .InvertDirection \"False\"
     .LocalCoordinates \"False\"
     .Monitor \"True\"
@@ -173,14 +174,32 @@ End With
 """.strip()
 
     def _set_boundary(self, parameters: Dict[str, Any]) -> str:
+        raw_boundary = str(parameters["boundary_type"]).strip().lower()
+        boundary_map = {
+            "open_add_space": "expanded open",
+            "open": "open",
+            "expanded_open": "expanded open",
+            "expanded_lf_open": "expanded lf open",
+            "electric": "electric",
+            "magnetic": "magnetic",
+            "periodic": "periodic",
+            "unit_cell": "unit cell",
+            "impedance": "impedance",
+            "normal": "normal",
+            "tangential": "tangential",
+        }
+        boundary = boundary_map.get(raw_boundary)
+        if boundary is None:
+            raise ValueError(f"Unsupported boundary_type for CST live execution: {parameters['boundary_type']}")
+
         return f"""
 With Boundary
-    .Xmin \"{parameters['boundary_type']}\"
-    .Xmax \"{parameters['boundary_type']}\"
-    .Ymin \"{parameters['boundary_type']}\"
-    .Ymax \"{parameters['boundary_type']}\"
-    .Zmin \"{parameters['boundary_type']}\"
-    .Zmax \"{parameters['boundary_type']}\"
+    .Xmin "{boundary}"
+    .Xmax "{boundary}"
+    .Ymin "{boundary}"
+    .Ymax "{boundary}"
+    .Zmin "{boundary}"
+    .Zmax "{boundary}"
 End With
 ' padding_mm={parameters['padding_mm']}
 """.strip()
@@ -203,6 +222,20 @@ ChangeSolverType \"{target}\"
 ' run_simulation
 ' timeout_sec={parameters['timeout_sec']}
 Solver.Start
+""".strip()
+
+    def _add_farfield_monitor(self, parameters: Dict[str, Any]) -> str:
+        frequency_ghz = float(parameters.get("frequency_ghz", 2.4))
+        name = str(parameters.get("name", f"farfield_{frequency_ghz:g}ghz"))
+        return f"""
+With Monitor
+    .Reset
+    .Name "{name}"
+    .Domain "Frequency"
+    .FieldType "Farfield"
+    .Frequency "{frequency_ghz}"
+    .Create
+End With
 """.strip()
 
     def _export_s_parameters(self, parameters: Dict[str, Any]) -> str:

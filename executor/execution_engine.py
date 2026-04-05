@@ -128,6 +128,93 @@ class ExecutionEngine:
                     macro="",
                 )
 
+            if command.command == "run_simulation":
+                timeout_sec = int(command.params.get("timeout_sec", 600))
+                if not self.dry_run and not self.cst_app.run_simulation(timeout_sec=timeout_sec):
+                    return ExecutionResult(
+                        f"{command.seq}:{command.command}",
+                        success=False,
+                        error=f"Failed to run simulation with timeout_sec={timeout_sec}",
+                    )
+                mode = "prepared" if self.dry_run else "executed"
+                return ExecutionResult(
+                    f"{command.seq}:{command.command}",
+                    success=True,
+                    output=f"{mode.capitalize()} run_simulation successfully",
+                    macro="",
+                )
+
+            if command.command == "export_s_parameters":
+                destination_hint = str(command.params.get("destination_hint", "s11"))
+                if not self.dry_run:
+                    exported_path = self.cst_app.export_s_parameters(destination_hint=destination_hint)
+                    if not exported_path:
+                        return ExecutionResult(
+                            f"{command.seq}:{command.command}",
+                            success=False,
+                            error="Failed to export S-parameters from CST",
+                        )
+                    output = f"Exported S-parameters to {exported_path}"
+                else:
+                    output = "Prepared export_s_parameters in dry-run mode"
+                return ExecutionResult(
+                    f"{command.seq}:{command.command}",
+                    success=True,
+                    output=output,
+                    macro="",
+                )
+
+            if command.command == "extract_summary_metrics":
+                if not self.dry_run:
+                    destination_hint = str(command.params.get("destination_hint", "s11"))
+                    sparam_path = self.cst_app.export_s_parameters(destination_hint=destination_hint)
+                    if not sparam_path:
+                        return ExecutionResult(
+                            f"{command.seq}:{command.command}",
+                            success=False,
+                            error="Failed to export S-parameters before metric extraction",
+                        )
+                    metrics = self.cst_app.extract_summary_metrics(sparam_path)
+                    if not metrics:
+                        return ExecutionResult(
+                            f"{command.seq}:{command.command}",
+                            success=False,
+                            error="Failed to parse summary metrics from S-parameter export",
+                        )
+                    output = f"Extracted metrics: {json.dumps(metrics)}"
+                else:
+                    output = "Prepared extract_summary_metrics in dry-run mode"
+                return ExecutionResult(
+                    f"{command.seq}:{command.command}",
+                    success=True,
+                    output=output,
+                    macro="",
+                )
+
+            if command.command == "export_farfield":
+                destination_hint = str(command.params.get("destination_hint", "farfield"))
+                frequency_ghz = float(command.params.get("frequency_ghz", 2.4))
+                if not self.dry_run:
+                    exported_path = self.cst_app.export_farfield(
+                        frequency_ghz=frequency_ghz,
+                        destination_hint=destination_hint,
+                    )
+                    if not exported_path:
+                        return ExecutionResult(
+                            f"{command.seq}:{command.command}",
+                            success=False,
+                            error="Failed to export far-field data from CST",
+                        )
+                    output = f"Exported far-field data to {exported_path}"
+                else:
+                    output = "Prepared export_farfield in dry-run mode"
+                return ExecutionResult(
+                    f"{command.seq}:{command.command}",
+                    success=True,
+                    output=output,
+                    macro="",
+                )
+
             # Generate VBA for command
             vba_code = self.vba_generator.generate_macro(command.command, command.params)
 
