@@ -199,14 +199,17 @@ class ClientInitializer:
             caps = await self.api_client.load_capabilities()
             self.state.capabilities_ok = True
             self.state.capabilities = caps
-            
-            # Extract supported antenna families for logging
-            families = caps.get("capabilities", {}).get("supported_antenna_families", [])
-            freq_range = caps.get("capabilities", {}).get("frequency_range_ghz", {})
+
+            # Support both historical nested payloads and current flat payloads.
+            payload = caps.get("capabilities", caps) if isinstance(caps, dict) else {}
+            families = payload.get("supported_families") or payload.get("supported_antenna_families") or []
+            freq_range = payload.get("frequency_range_ghz", {})
+            bw_range = payload.get("bandwidth_range_mhz", {})
             
             await self._notify_progress(
                 f"✅ Capabilities loaded: {len(families)} antenna families, "
-                f"freq range {freq_range.get('min', '?')}-{freq_range.get('max', '?')} GHz"
+                f"freq range {freq_range.get('min', '?')}-{freq_range.get('max', '?')} GHz, "
+                f"bandwidth {bw_range.get('min', '?')}-{bw_range.get('max', '?')} MHz"
             )
             return True
             

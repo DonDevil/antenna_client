@@ -1,4 +1,2 @@
-With Solver
-    .Method "time_domain"
-End With
+ChangeSolverType "HF Time Domain"
 ' mesh_cells_per_wavelength=20

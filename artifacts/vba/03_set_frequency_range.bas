@@ -1,1 +1,1 @@
-Solver.FrequencyRange "1.9", "2.9"
+Solver.FrequencyRange "2.5", "3.5"

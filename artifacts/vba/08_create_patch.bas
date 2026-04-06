@@ -2,12 +2,9 @@ With Brick
     .Reset
     .Name "patch"
     .Component "component1"
-    .Material "Copper (annealed)"
-    .Xmin -15.933136253356935
-    .Xmax 15.933136253356935
-    .Ymin -18.40303611755371
-    .Ymax 18.40303611755371
-    .Zmin 4.272670269012451
-    .Zmax 4.309272691607475
+    .Material "Copper_(annealed)"
+    .Xrange "-12.463409423828125", "12.463409423828125"
+    .Yrange "-14.796342849731445", "14.796342849731445"
+    .Zrange "4.164238452911377", "4.201440930366516"
     .Create
 End With

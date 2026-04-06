@@ -146,9 +146,16 @@ class MainWindow(QMainWindow):
         
         logger.info(f"Initialization complete! ANN: {ann_status}, LLM: {llm_status}")
         self.status_bar.show_message("✅ Ready")
-        
-        # Initialize chat if startup successful
-        self.message_handler.reset_workflow()
+
+        capabilities_payload = state.get("capabilities", {})
+        payload = capabilities_payload.get("capabilities", capabilities_payload)
+        supported_families = payload.get("supported_families") or payload.get("supported_antenna_families") or []
+        if supported_families:
+            self.design_panel.set_supported_families(supported_families)
+
+        # Restore latest persisted session when available; otherwise start fresh.
+        if not self.message_handler.restore_latest_session():
+            self.message_handler.reset_workflow()
     
     def on_init_error(self, error: str):
         """Handle initialization error
@@ -353,6 +360,9 @@ class MainWindow(QMainWindow):
         # Stop health monitor
         if self.health_monitor:
             self.health_monitor.stop()
+
+        if self.message_handler:
+            self.message_handler.shutdown()
         
         # Continue with normal close
         super().closeEvent(event)

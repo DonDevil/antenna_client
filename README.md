@@ -18,6 +18,12 @@ python scripts/run_integration_tests.py
 pytest tests -q
 ```
 
+For a real CST-backed pre-UI gate run (optimize -> CST execution -> feedback loop):
+
+```bash
+python scripts/run_cst_pipeline_once.py
+```
+
 ## Repository Layout
 
 ```text

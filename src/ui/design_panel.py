@@ -39,6 +39,12 @@ class DesignPanel(QWidget):
         self.antenna_combo = QComboBox()
         self.antenna_combo.addItems(["amc_patch", "microstrip_patch", "wban_patch"])
         specs_layout.addRow("Antenna Type:", self.antenna_combo)
+
+        # Chat behavior mode
+        self.chat_mode_combo = QComboBox()
+        self.chat_mode_combo.addItem("Speed (Intent Parse)", "speed")
+        self.chat_mode_combo.addItem("Quality (Rich Chat)", "quality")
+        specs_layout.addRow("Chat Mode:", self.chat_mode_combo)
         
         # Frequency
         self.freq_spin = QDoubleSpinBox()
@@ -152,6 +158,7 @@ class DesignPanel(QWidget):
     def reset_values(self):
         """Reset to default values"""
         self.antenna_combo.setCurrentText("amc_patch")
+        self.chat_mode_combo.setCurrentIndex(0)
         self.freq_spin.setValue(2.4)
         self.bw_spin.setValue(100)
         self.vswr_spin.setValue(1.5)
@@ -177,6 +184,20 @@ class DesignPanel(QWidget):
         if bandwidth_mhz is not None:
             self.bw_spin.setValue(max(self.bw_spin.minimum(), min(self.bw_spin.maximum(), float(bandwidth_mhz))))
 
+    def set_supported_families(self, families: list[str]) -> None:
+        """Update antenna family options from server capabilities."""
+        cleaned = [str(item).strip() for item in families if str(item).strip()]
+        if not cleaned:
+            return
+
+        current = self.antenna_combo.currentText()
+        self.antenna_combo.blockSignals(True)
+        self.antenna_combo.clear()
+        self.antenna_combo.addItems(cleaned)
+        if current in cleaned:
+            self.antenna_combo.setCurrentText(current)
+        self.antenna_combo.blockSignals(False)
+
     def set_session_metadata(
         self,
         session_id: str | None,
@@ -188,6 +209,24 @@ class DesignPanel(QWidget):
         self.trace_label.setText(trace_id or "-")
         self.stage_label.setText(stage or "Idle")
         self.command_count_label.setText(str(command_count))
+
+    def set_feedback_values(
+        self,
+        *,
+        center_frequency_ghz: float | None = None,
+        bandwidth_mhz: float | None = None,
+        vswr: float | None = None,
+        gain_dbi: float | None = None,
+    ) -> None:
+        """Prefill feedback controls from extracted CST metrics."""
+        if center_frequency_ghz is not None:
+            self.fb_freq_spin.setValue(max(self.fb_freq_spin.minimum(), min(self.fb_freq_spin.maximum(), float(center_frequency_ghz))))
+        if bandwidth_mhz is not None:
+            self.fb_bw_spin.setValue(max(self.fb_bw_spin.minimum(), min(self.fb_bw_spin.maximum(), float(bandwidth_mhz))))
+        if vswr is not None:
+            self.fb_vswr_spin.setValue(max(self.fb_vswr_spin.minimum(), min(self.fb_vswr_spin.maximum(), float(vswr))))
+        if gain_dbi is not None:
+            self.fb_gain_spin.setValue(max(self.fb_gain_spin.minimum(), min(self.fb_gain_spin.maximum(), float(gain_dbi))))
 
     def _emit_feedback_requested(self):
         self.feedback_requested.emit(self.get_feedback_values())
@@ -210,6 +249,13 @@ class DesignPanel(QWidget):
                 "target_gain_dbi": self.gain_spin.value()
             }
         }
+
+    def get_chat_mode(self) -> str:
+        """Return selected chat endpoint behavior mode."""
+        mode = self.chat_mode_combo.currentData()
+        if mode in {"speed", "quality"}:
+            return str(mode)
+        return "speed"
 
     def get_feedback_values(self) -> dict:
         """Collect CST feedback values from the panel."""

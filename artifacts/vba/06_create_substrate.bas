@@ -2,12 +2,9 @@ With Brick
     .Reset
     .Name "substrate"
     .Component "component1"
-    .Material "FR-4 (lossy)"
-    .Xmin -28.316450119018555
-    .Xmax 28.316450119018555
-    .Ymin -30.587848663330078
-    .Ymax 30.587848663330078
-    .Zmin 0.0
-    .Zmax 4.272670269012451
+    .Material "Rogers_RT_duroid_5880"
+    .Xrange "-24.752168655395508", "24.752168655395508"
+    .Yrange "-26.82314109802246", "26.82314109802246"
+    .Zrange "0.0", "4.164238452911377"
     .Create
 End With

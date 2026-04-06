@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Dict, Any, List
 
 from utils.logger import get_logger
@@ -12,6 +13,20 @@ logger = get_logger(__name__)
 
 class VBAGenerator:
     """Generate VBA macro code from commands"""
+
+    @staticmethod
+    def _sanitize_cst_name(value: Any) -> str:
+        """Normalize names for CST object/material identifiers.
+
+        CST rejects names containing characters such as `/`, `\`, `:` and others.
+        """
+        raw = str(value).strip()
+        if not raw:
+            return "unnamed"
+        sanitized = re.sub(r'[~\[\]:,|*/\\$"^<>?]+', "_", raw)
+        sanitized = re.sub(r"\s+", "_", sanitized)
+        sanitized = re.sub(r"_+", "_", sanitized).strip("_")
+        return sanitized or "unnamed"
     
     def generate_macro(self, command_type: str, parameters: Dict[str, Any]) -> str:
         """Generate VBA macro for command
@@ -53,12 +68,14 @@ class VBAGenerator:
 
     @staticmethod
     def _brick(name: str, material: str, x_min: float, x_max: float, y_min: float, y_max: float, z_min: float, z_max: float) -> str:
+        safe_name = VBAGenerator._sanitize_cst_name(name)
+        safe_material = VBAGenerator._sanitize_cst_name(material)
         return f"""
 With Brick
     .Reset
-    .Name \"{name}\"
+    .Name \"{safe_name}\"
     .Component \"component1\"
-    .Material \"{material}\"
+    .Material \"{safe_material}\"
     .Xrange \"{x_min}\", \"{x_max}\"
     .Yrange \"{y_min}\", \"{y_max}\"
     .Zrange \"{z_min}\", \"{z_max}\"
@@ -81,7 +98,7 @@ End With
         return f"Solver.FrequencyRange \"{parameters['start_ghz']}\", \"{parameters['stop_ghz']}\""
 
     def _define_material(self, parameters: Dict[str, Any]) -> str:
-        name = parameters["name"]
+        name = self._sanitize_cst_name(parameters["name"])
         kind = parameters["kind"]
         if kind == "conductor":
             conductivity = parameters.get("conductivity_s_per_m", 5.8e7)
@@ -226,7 +243,8 @@ Solver.Start
 
     def _add_farfield_monitor(self, parameters: Dict[str, Any]) -> str:
         frequency_ghz = float(parameters.get("frequency_ghz", 2.4))
-        name = str(parameters.get("name", f"farfield_{frequency_ghz:g}ghz"))
+        raw_name = str(parameters.get("name", f"farfield_{frequency_ghz:g}ghz"))
+        name = self._sanitize_cst_name(raw_name)
         return f"""
 With Monitor
     .Reset

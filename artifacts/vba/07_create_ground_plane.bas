@@ -2,12 +2,9 @@ With Brick
     .Reset
     .Name "ground"
     .Component "component1"
-    .Material "Copper (annealed)"
-    .Xmin -28.316450119018555
-    .Xmax 28.316450119018555
-    .Ymin -30.587848663330078
-    .Ymax 30.587848663330078
-    .Zmin 0.0
-    .Zmax 0.03660242259502411
+    .Material "Copper_(annealed)"
+    .Xrange "-24.752168655395508", "24.752168655395508"
+    .Yrange "-26.82314109802246", "26.82314109802246"
+    .Zrange "0.0", "0.03720247745513916"
     .Create
 End With

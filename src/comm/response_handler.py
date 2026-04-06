@@ -151,7 +151,7 @@ class ResponseHandler:
         Returns:
             Chat message text
         """
-        return response_data.get("response", "")
+        return response_data.get("assistant_message") or response_data.get("response", "")
     
     def parse_feedback_response(self, response_data: Dict[str, Any]) -> Dict[str, Any]:
         """Parse feedback response

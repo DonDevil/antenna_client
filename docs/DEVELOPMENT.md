@@ -12,6 +12,7 @@ Real-server validation uses the URL configured in [config.json](../config.json):
 ```bash
 python scripts/run_real_integration_tests.py
 python scripts/workflow_validation.py
+python scripts/run_cst_pipeline_once.py
 ```
 
 ## Utility Scripts
@@ -21,6 +22,7 @@ python scripts/workflow_validation.py
 - `scripts/schema_comparison.py`: compare generated request shape against expected schema.
 - `scripts/diagnose_server.py`: send a direct debug request to inspect server errors.
 - `scripts/debug_schema_validation.py`: incremental request-shape debugging.
+- `scripts/run_cst_pipeline_once.py`: one full CST-in-the-loop gate run (optimize -> execute -> feedback), with loop control for next-command handoff.
 
 ## Conventions
 

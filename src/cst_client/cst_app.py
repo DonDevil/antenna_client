@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import platform
 import re
 from pathlib import Path
@@ -407,7 +408,12 @@ class CSTApp:
 
     @staticmethod
     def extract_summary_metrics(sparam_file: str) -> Optional[dict]:
-        """Extract basic metrics from ASCII S-parameter export."""
+        """Extract resonance metrics from ASCII S-parameter export.
+
+        Supports both:
+        - two-column format: frequency, S11_dB
+        - CST XY complex format: frequency, real, imag, ...
+        """
         path = Path(sparam_file)
         if not path.exists():
             return None
@@ -423,7 +429,14 @@ class CSTApp:
                 continue
             try:
                 f = float(parts[0])
-                v = float(parts[1])
+                if len(parts) >= 3:
+                    real = float(parts[1])
+                    imag = float(parts[2])
+                    mag = (real * real + imag * imag) ** 0.5
+                    mag = max(mag, 1e-12)
+                    v = 20.0 * math.log10(mag)
+                else:
+                    v = float(parts[1])
             except ValueError:
                 continue
             freq.append(f)
@@ -432,14 +445,29 @@ class CSTApp:
         if not freq:
             return None
 
+        # Convert frequency to GHz when source is MHz/Hz scale.
+        max_freq = max(freq)
+        if max_freq > 1000.0:
+            freq = [f / 1_000_000_000.0 for f in freq]
+        elif max_freq > 100.0:
+            freq = [f / 1000.0 for f in freq]
+
         min_idx = min(range(len(s11_db)), key=lambda i: s11_db[i])
         center = freq[min_idx]
 
         threshold = -10.0
         in_band = [i for i, value in enumerate(s11_db) if value <= threshold]
         if len(in_band) >= 2:
-            start = freq[in_band[0]]
-            stop = freq[in_band[-1]]
+            # Keep only contiguous -10 dB region around the resonance dip.
+            dip_index_set = set(in_band)
+            left = min_idx
+            while (left - 1) in dip_index_set:
+                left -= 1
+            right = min_idx
+            while (right + 1) in dip_index_set:
+                right += 1
+            start = freq[left]
+            stop = freq[right]
             bandwidth = max(stop - start, 0.0)
         else:
             start = stop = center
@@ -451,6 +479,7 @@ class CSTApp:
             "min_s11_db": s11_db[min_idx],
             "start_freq": start,
             "stop_freq": stop,
+            "sample_count": len(freq),
         }
     
     def get_project_path(self) -> Optional[str]:

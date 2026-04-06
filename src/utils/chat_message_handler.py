@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
@@ -14,9 +15,12 @@ from comm.api_client import ApiClient
 from comm.request_builder import RequestBuilder
 from comm.response_handler import ResponseHandler
 from comm.server_connector import ServerConnector
+from cst_client.cst_app import CSTApp
 from executor.command_parser import CommandParser
 from executor.execution_engine import ExecutionEngine
 from session.design_exporter import DesignExporter
+from session.session_store import SessionStore
+from comm.ws_client import SessionEventListener
 from utils.logger import get_logger
 from utils.validators import extract_antenna_family, extract_frequency_bandwidth
 
@@ -49,10 +53,11 @@ class _BaseWorker(QThread):
 class ChatRequestWorker(_BaseWorker):
     response_ready = Signal(dict)
 
-    def __init__(self, user_message: str, requirements: dict[str, Any]):
+    def __init__(self, user_message: str, requirements: dict[str, Any], chat_mode: str = "speed"):
         super().__init__()
         self.user_message = user_message
         self.requirements = requirements
+        self.chat_mode = chat_mode if chat_mode in {"speed", "quality"} else "speed"
 
     def run(self):
         try:
@@ -66,14 +71,28 @@ class ChatRequestWorker(_BaseWorker):
     async def _chat_async(self, base_url: str) -> dict[str, Any]:
         async with ServerConnector(base_url, timeout_sec=30) as connector:
             api = ApiClient(connector)
-            try:
-                response = await api.chat(self.user_message, self.requirements)
-            except Exception:
-                response = {}
-            try:
-                intent_summary = response.get("intent_summary") or await api.parse_intent(self.user_message)
-            except Exception:
-                intent_summary = {}
+            response: dict[str, Any]
+            if self.chat_mode == "quality":
+                try:
+                    response = await api.chat(self.user_message, self.requirements)
+                except Exception:
+                    response = {}
+            else:
+                try:
+                    response = {"intent_summary": await api.parse_intent(self.user_message)}
+                except Exception:
+                    response = {}
+
+        # Keep chat responsive: avoid extra intent endpoint round-trip on each message.
+        intent_summary = response.get("intent_summary") if isinstance(response, dict) else {}
+        if not intent_summary:
+            parsed_freq, parsed_bw = extract_frequency_bandwidth(self.user_message)
+            parsed_family = extract_antenna_family(self.user_message)
+            intent_summary = {
+                "parsed_frequency_ghz": parsed_freq,
+                "parsed_bandwidth_mhz": parsed_bw,
+                "parsed_antenna_family": parsed_family,
+            }
 
         requirements = dict(self.requirements)
         parsed_freq = intent_summary.get("parsed_frequency_ghz")
@@ -213,6 +232,10 @@ class ChatMessageHandler:
         self.current_worker = None
         self.response_handler = ResponseHandler()
         self.design_exporter = DesignExporter()
+        self.session_store = SessionStore()
+        self.ws_listener: SessionEventListener | None = None
+        self.ws_thread: threading.Thread | None = None
+        self.ws_stop_event = threading.Event()
 
         self.requirements = {
             "frequency_ghz": None,
@@ -241,8 +264,10 @@ class ChatMessageHandler:
             self.chat_widget.add_message("Please provide a longer message so I can extract antenna requirements.", "assistant")
             return
 
-        self._show_status("Extracting requirements from chat...")
-        self.current_worker = ChatRequestWorker(message, self.requirements.copy())
+        chat_mode = self.design_panel.get_chat_mode()
+        mode_label = "speed" if chat_mode == "speed" else "quality"
+        self._show_status(f"Extracting requirements from chat ({mode_label} mode)...")
+        self.current_worker = ChatRequestWorker(message, self.requirements.copy(), chat_mode=chat_mode)
         self.current_worker.response_ready.connect(self.on_chat_response_received)
         self.current_worker.error_occurred.connect(self.on_error_occurred)
         self.current_worker.start()
@@ -286,6 +311,26 @@ class ChatMessageHandler:
         self.design_id = None
         self.iteration_index = 0
 
+        # Persist runtime session metadata for recovery on app restart.
+        if optimize_response.session_id:
+            existing = self.session_store.get_session(optimize_response.session_id)
+            if existing is None:
+                self.session_store.create_session(
+                    user_request=self._build_pipeline_request_text(self.design_panel.get_specs()),
+                    session_id=optimize_response.session_id,
+                    trace_id=optimize_response.trace_id,
+                    design_id=(optimize_response.command_package or {}).get("design_id"),
+                )
+            else:
+                self.session_store.update_session_metadata(
+                    optimize_response.session_id,
+                    trace_id=optimize_response.trace_id,
+                    design_id=(optimize_response.command_package or {}).get("design_id"),
+                )
+            if optimize_response.command_package:
+                self.session_store.store_command_package(optimize_response.session_id, optimize_response.command_package)
+            self.session_store.update_session_status(optimize_response.session_id, "active")
+
         command_count = 0
         if optimize_response.command_package:
             command_count = len(optimize_response.command_package.get("commands", []))
@@ -306,6 +351,7 @@ class ChatMessageHandler:
         if optimize_response.command_package:
             self._show_status(f"Received {command_count} server commands. Preparing CST execution...")
             self.status_bar.set_progress(0, max(command_count, 1)) if self.status_bar else None
+            self._attach_session_stream(optimize_response.session_id)
             self.current_worker = CommandExecutionWorker(optimize_response.command_package)
             self.current_worker.response_ready.connect(self.on_execution_completed)
             self.current_worker.error_occurred.connect(self.on_error_occurred)
@@ -325,6 +371,20 @@ class ChatMessageHandler:
         if self.status_bar:
             self.status_bar.set_progress(total, total)
 
+        # Auto-fill feedback fields from latest CST exports to reduce manual work.
+        self._prefill_feedback_from_exports()
+
+        if self.session_id:
+            self.session_store.store_result(
+                self.session_id,
+                {
+                    "iteration_index": self.iteration_index,
+                    "dry_run": dry_run,
+                    "progress": progress,
+                    "results": self.current_execution_results,
+                },
+            )
+
         mode_text = "prepared for execution" if dry_run else "executed in CST"
         lines = [
             f"Command package {mode_text}.",
@@ -337,6 +397,8 @@ class ChatMessageHandler:
                 lines.append("Failed commands: " + ", ".join(failed_cmds))
         if dry_run:
             lines.append("CST live execution is still running in preparation mode where COM calls are not available.")
+        else:
+            lines.append("Simulation metrics were extracted and prefilled in the Submit Feedback section.")
 
         self.chat_widget.add_message("\n".join(lines), "assistant")
         self._show_status("Command package processed.")
@@ -354,21 +416,31 @@ class ChatMessageHandler:
         sparam_metrics_path, sparam_metrics = self._load_latest_sparam_metrics()
         farfield_metrics_path, farfield_metrics = self._load_latest_farfield_metrics()
 
+        s11 = self._extract_s11_metrics(sparam_metrics)
+
+        center_candidate = s11.get("center_frequency")
+        bw_candidate = s11.get("bandwidth_mhz")
+        rl_candidate = s11.get("return_loss_db")
+
         actual_center_frequency_ghz = float(
-            sparam_metrics.get("center_frequency", feedback_values["actual_center_frequency_ghz"])
-            if sparam_metrics
+            center_candidate
+            if center_candidate is not None
             else feedback_values["actual_center_frequency_ghz"]
         )
         actual_bandwidth_mhz = float(
-            (sparam_metrics.get("bandwidth", 0.0) * 1000.0)
-            if sparam_metrics and sparam_metrics.get("bandwidth") is not None
+            bw_candidate
+            if bw_candidate is not None
             else feedback_values["actual_bandwidth_mhz"]
         )
-        actual_return_loss_db = float(
-            sparam_metrics.get("min_s11_db", -18.0)
-            if sparam_metrics
-            else -18.0
-        )
+        actual_return_loss_db = float(rl_candidate if rl_candidate is not None else 18.0)
+
+        # Keep values schema-safe before sending to server.
+        if actual_center_frequency_ghz <= 0 or actual_bandwidth_mhz < 0:
+            self.chat_widget.add_message(
+                "Feedback values are invalid (frequency/bandwidth). Run pipeline execution again or adjust manually.",
+                "assistant",
+            )
+            return
 
         parsed_gain = None
         if farfield_metrics:
@@ -378,6 +450,10 @@ class ChatMessageHandler:
             if parsed_gain is None:
                 parsed_gain = farfield_metrics.get("theta_cut_peak_gain_dbi")
         actual_gain_dbi = float(parsed_gain if parsed_gain is not None else feedback_values["actual_gain_dbi"])
+
+        actual_vswr = feedback_values["actual_vswr"]
+        if s11.get("vswr") is not None and 1.0 <= float(s11["vswr"]) <= 25.0:
+            actual_vswr = s11["vswr"]
 
         payload = {
             "schema_version": "client_feedback.v1",
@@ -389,7 +465,7 @@ class ChatMessageHandler:
             "actual_center_frequency_ghz": actual_center_frequency_ghz,
             "actual_bandwidth_mhz": actual_bandwidth_mhz,
             "actual_return_loss_db": actual_return_loss_db,
-            "actual_vswr": feedback_values["actual_vswr"],
+            "actual_vswr": float(actual_vswr),
             "actual_gain_dbi": actual_gain_dbi,
             "notes": f"Iteration {self.iteration_index}: CST simulation completed successfully.",
             "artifacts": {
@@ -415,11 +491,19 @@ class ChatMessageHandler:
         status = response_data.get("status", "unknown")
         self.chat_widget.add_message(f"Feedback accepted. Server status: {status}.", "assistant")
 
+        if self.session_id:
+            if status in ("completed", "failed"):
+                self.session_store.update_session_status(self.session_id, status)
+            else:
+                self.session_store.update_session_status(self.session_id, "active")
+
         next_package = response_data.get("next_command_package")
         if next_package:
             self.current_command_package = next_package
             self.iteration_index = int(next_package.get("iteration_index", self.iteration_index + 1))
             self.design_id = next_package.get("design_id", self.design_id)
+            if self.session_id:
+                self.session_store.store_command_package(self.session_id, next_package)
             self.design_panel.set_session_metadata(
                 self.session_id,
                 self.trace_id,
@@ -443,6 +527,7 @@ class ChatMessageHandler:
 
     def reset_workflow(self):
         """Reset chat, extracted requirements, pipeline state, and panel values."""
+        self._detach_session_stream()
         self.chat_widget.clear_history()
         self.design_panel.reset_values()
         self.requirements = {
@@ -459,6 +544,110 @@ class ChatMessageHandler:
         self.iteration_index = 0
         self.chat_widget.add_message("Tell me your antenna requirement. I will update the fields, then you can start the pipeline.", "assistant")
         self._show_status("Workflow reset.")
+
+    def restore_latest_session(self) -> bool:
+        """Restore the most recently updated persisted session into the runtime state."""
+        sessions = self.session_store.list_sessions()
+        if not sessions:
+            return False
+
+        latest = max(sessions, key=lambda item: item.get("updated_at", ""))
+        session_id = latest.get("session_id")
+        if not session_id:
+            return False
+
+        self.session_id = session_id
+        self.trace_id = latest.get("trace_id")
+        self.design_id = latest.get("design_id")
+        self.iteration_index = int(latest.get("current_iteration", 0))
+        self.current_command_package = latest.get("command_package")
+        self.current_execution_results = latest.get("results", [])
+
+        command_count = len((self.current_command_package or {}).get("commands", []))
+        stage = latest.get("status", "recovered")
+        self.design_panel.set_session_metadata(self.session_id, self.trace_id, stage, command_count)
+
+        # Try to restore target specs from the latest command package prediction.
+        predicted = (self.current_command_package or {}).get("predicted_metrics", {})
+        if predicted:
+            freq = predicted.get("center_frequency_ghz")
+            bw = predicted.get("bandwidth_mhz")
+            self.design_panel.set_spec_values(frequency_ghz=freq, bandwidth_mhz=bw)
+
+        self.chat_widget.add_message(
+            f"Recovered previous session {self.session_id}. You can continue from the last saved pipeline state.",
+            "assistant",
+        )
+        self._show_status("Recovered latest session state.")
+        return True
+
+    def shutdown(self):
+        """Release background resources before UI shutdown."""
+        self._detach_session_stream()
+
+    def _attach_session_stream(self, session_id: str | None) -> None:
+        if not session_id:
+            return
+
+        self._detach_session_stream()
+        self.ws_stop_event.clear()
+
+        def _worker() -> None:
+            asyncio.run(self._stream_session_events(session_id))
+
+        self.ws_thread = threading.Thread(target=_worker, daemon=True, name=f"ws-session-{session_id[:8]}")
+        self.ws_thread.start()
+
+    def _detach_session_stream(self) -> None:
+        self.ws_stop_event.set()
+        if self.ws_thread and self.ws_thread.is_alive():
+            self.ws_thread.join(timeout=1.0)
+        self.ws_thread = None
+
+    async def _stream_session_events(self, session_id: str) -> None:
+        base_url = self.server_base_url or _BaseWorker._load_base_url()
+        ws_base = self._build_ws_base_url(base_url)
+        listener = SessionEventListener(ws_base)
+        self.ws_listener = listener
+
+        async def _on_event(event_data: dict[str, Any]) -> None:
+            event_type = event_data.get("event_type", "unknown")
+            logger.info(f"WS session event[{session_id}]: {event_type}")
+
+        async def _on_error(error: Exception) -> None:
+            logger.warning(f"WS session stream error[{session_id}]: {error}")
+
+        listener.on_event("iteration.completed", _on_event)
+        listener.on_event("session.updated", _on_event)
+        listener.on_error(_on_error)
+
+        connected = await listener.connect(session_id)
+        if not connected:
+            return
+
+        try:
+            listen_task = asyncio.create_task(listener.listen())
+            while not self.ws_stop_event.is_set() and not listen_task.done():
+                await asyncio.sleep(0.2)
+
+            if self.ws_stop_event.is_set() and not listen_task.done():
+                await listener.disconnect()
+
+            await listen_task
+        finally:
+            await listener.disconnect()
+            self.ws_listener = None
+
+    @staticmethod
+    def _build_ws_base_url(http_base_url: str) -> str:
+        text = str(http_base_url).strip()
+        if text.startswith("https://"):
+            return "wss://" + text[len("https://"):]
+        if text.startswith("http://"):
+            return "ws://" + text[len("http://"):]
+        if text.startswith("ws://") or text.startswith("wss://"):
+            return text
+        return f"ws://{text}"
 
     def export_current_state(self):
         """Export the current desktop workflow state to a JSON file."""
@@ -559,8 +748,29 @@ class ChatMessageHandler:
         return None
 
     def _load_latest_sparam_metrics(self) -> tuple[Path | None, dict[str, Any] | None]:
-        metrics_path = (Path("artifacts") / "exports" / "summary_metrics.json").resolve()
-        return metrics_path, self._load_json_file(metrics_path)
+        exports_dir = (Path("artifacts") / "exports").resolve()
+        if not exports_dir.exists():
+            return None, None
+
+        candidates = sorted(
+            exports_dir.glob("summary_metrics*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for candidate in candidates:
+            data = self._load_json_file(candidate)
+            if data:
+                return candidate, data
+
+        # Fallback: compute from raw S11 text export.
+        s11_txt = exports_dir / "s11.txt"
+        if s11_txt.exists():
+            computed = CSTApp.extract_summary_metrics(str(s11_txt))
+            if computed:
+                fallback = {"s11_metrics": computed, "farfield_metrics": None}
+                return s11_txt, fallback
+
+        return None, None
 
     def _load_latest_farfield_metrics(self) -> tuple[Path | None, dict[str, Any] | None]:
         exports_dir = (Path("artifacts") / "exports").resolve()
@@ -581,6 +791,72 @@ class ChatMessageHandler:
             if "main_lobe_direction_deg" in data or "beamwidth_3db_deg" in data:
                 return candidate, data
         return None, None
+
+    def _prefill_feedback_from_exports(self) -> None:
+        _, sparam_metrics = self._load_latest_sparam_metrics()
+        _, farfield_metrics = self._load_latest_farfield_metrics()
+        s11 = self._extract_s11_metrics(sparam_metrics)
+
+        parsed_gain = None
+        if farfield_metrics:
+            parsed_gain = farfield_metrics.get("max_realized_gain_dbi")
+            if parsed_gain is None:
+                parsed_gain = farfield_metrics.get("max_gain_dbi")
+            if parsed_gain is None:
+                parsed_gain = farfield_metrics.get("theta_cut_peak_gain_dbi")
+
+        self.design_panel.set_feedback_values(
+            center_frequency_ghz=s11.get("center_frequency"),
+            bandwidth_mhz=s11.get("bandwidth_mhz"),
+            vswr=s11.get("vswr"),
+            gain_dbi=parsed_gain,
+        )
+
+        if s11.get("center_frequency") is not None:
+            self._show_status("Feedback section prefilled from CST results.")
+
+    @staticmethod
+    def _extract_s11_metrics(raw_metrics: dict[str, Any] | None) -> dict[str, float | None]:
+        if not raw_metrics:
+            return {
+                "center_frequency": None,
+                "bandwidth_mhz": None,
+                "min_s11_db": None,
+                "return_loss_db": None,
+                "vswr": None,
+            }
+
+        # Support both flat and nested summary formats.
+        s11_data = raw_metrics.get("s11_metrics") if isinstance(raw_metrics, dict) else None
+        if not isinstance(s11_data, dict):
+            s11_data = raw_metrics
+
+        center = s11_data.get("center_frequency")
+        bw_ghz = s11_data.get("bandwidth")
+        min_s11_db = s11_data.get("min_s11_db")
+
+        center_val = float(center) if center is not None else None
+        bw_mhz_val = float(bw_ghz) * 1000.0 if bw_ghz is not None else None
+        min_s11_val = float(min_s11_db) if min_s11_db is not None else None
+        rl_val = abs(min_s11_val) if min_s11_val is not None else None
+        if rl_val is not None and rl_val < 0.1:
+            rl_val = None
+
+        vswr_val = None
+        if rl_val is not None:
+            gamma = 10 ** (-rl_val / 20.0)
+            if gamma < 1.0:
+                vswr_val = (1.0 + gamma) / (1.0 - gamma)
+                if vswr_val > 25.0:
+                    vswr_val = None
+
+        return {
+            "center_frequency": center_val,
+            "bandwidth_mhz": bw_mhz_val,
+            "min_s11_db": min_s11_val,
+            "return_loss_db": rl_val,
+            "vswr": vswr_val,
+        }
 
     @staticmethod
     def _format_design_response(resp) -> str:
