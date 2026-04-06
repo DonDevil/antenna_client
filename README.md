@@ -1,94 +1,46 @@
 # Antenna Optimization Client
 
-A modular Windows desktop application for iterative antenna design optimization through conversational AI.
-
-**Version**: 0.1.0 (Phase 1 - Foundation)
+Windows client for conversational antenna design, server-driven optimization, and CST execution workflows.
 
 ## Quick Start
 
-### Prerequisites
-- Python 3.10 or higher
-- Windows 10/11
-- CST Studio Suite (optional, required for full functionality)
-
-### Development Setup
-
 ```bash
-# Clone repository
-git clone <repo-url>
-cd antenna_client
-
-# Create virtual environment
-python -m venv venv
-.\venv\Scripts\activate
-
-# Install dependencies
+python -m venv .venv
+.\.venv\Scripts\activate
 pip install -r requirements.txt
-
-# Run application
 python main.py
 ```
 
-### Configuration
-
-Copy `config.json` to your home directory or modify locally:
-```json
-{
-  "server": {
-    "base_url": "http://localhost:8000",
-    "timeout_sec": 60
-  }
-}
-```
-
-## Project Structure
-
-```
-antenna_client/
-├── ui/                  # User interface components
-├── comm/                # Server communication layer
-├── session/             # State management and persistence
-├── cst/                 # CST Studio automation (Phase 3+)
-├── executor/            # Command execution (Phase 3+)
-├── utils/               # Logging, validation, constants
-├── main.py              # Entry point
-├── config.json          # Configuration template
-└── requirements.txt     # Python dependencies
-```
-
-## Development Phases
-
-- **Phase 1** (Current): Foundation, basic UI, server connectivity
-- **Phase 2**: Chat interface, intent parsing
-- **Phase 3**: CST integration, VBA generation
-- **Phase 4**: Measurement extraction
-- **Phase 5**: Feedback loop and iteration
-- **Phase 6**: Error recovery and production readiness
-
-## Key Features (Phase 1)
-
-- ✓ Project structure and module organization
-- ✓ Basic PyQt6 UI with menu bar
-- ✓ Async HTTP client for server communication
-- ✓ In-memory session management
-- ✓ Structured logging
-- ✓ Configuration management
-
-## Testing
+For automated validation:
 
 ```bash
-pytest tests/
+python scripts/run_integration_tests.py
+pytest tests -q
+```
+
+## Repository Layout
+
+```text
+antenna_client/
+├── src/            # Application packages
+├── tests/          # Unit and integration tests
+├── scripts/        # Utility and validation scripts
+├── docs/           # Active documentation and archived reports
+├── config.json     # Runtime configuration
+├── main.py         # Root launcher that forwards to src/main.py
+└── requirements.txt
 ```
 
 ## Documentation
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) - Detailed architecture documentation
-- Phase-specific implementation guides coming soon
+- See [docs/README.md](docs/README.md) for the documentation index.
+- See [docs/SETUP.md](docs/SETUP.md) for installation and environment setup.
+- See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for component layout.
+- See [docs/API.md](docs/API.md) for the client-server contract.
+- See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for test and maintenance guidance.
 
-## Support
+## Current Status
 
-For issues or questions, please open a GitHub issue or contact the team.
-
-## License
-
-[TBD]
+- The client is organized around a `src/` layout while preserving `python main.py` from the repository root.
+- Integration support is wired for the configured server in [config.json](config.json).
+- Historical one-off reports have been moved under `docs/archive/` to keep the root clean.

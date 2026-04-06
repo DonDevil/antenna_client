@@ -1,0 +1,18 @@
+{
+  "user_request": "Design a microstrip patch antenna at 2.45 GHz with 100 MHz bandwidth",
+  "design_specs": {
+    "antenna_family": "microstrip_patch",
+    "frequency_ghz": 2.45,
+    "bandwidth_mhz": 100.0,
+    "constraints": {
+      "max_vswr": 2.0,
+      "target_gain_dbi": 5.0
+    }
+  },
+  "workflow": [
+    "health_check",
+    "optimize_request",
+    "cst_execution",
+    "client_feedback"
+  ]
+}

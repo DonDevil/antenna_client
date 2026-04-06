@@ -1,0 +1,13 @@
+{
+  "session_id": "test-recovery-001",
+  "trace_id": "trace-001",
+  "design_id": "design-001",
+  "user_request": "Test recovery session",
+  "created_at": "2026-04-06T23:06:31.170829",
+  "updated_at": "2026-04-06T23:06:31.181840",
+  "status": "completed",
+  "current_iteration": 0,
+  "command_package": null,
+  "results": [],
+  "metadata": {}
+}

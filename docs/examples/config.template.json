@@ -19,17 +19,5 @@
     "default_height": 800,
     "auto_connect": true,
     "show_advanced": false
-  },
-  "logging": {
-    "level": "INFO",
-    "max_file_size_mb": 10,
-    "backup_count": 5,
-    "log_dir": "logs"
-  },
-  "client_capabilities": {
-    "supports_farfield_export": true,
-    "supports_current_distribution_export": true,
-    "max_simulation_timeout_sec": 600,
-    "export_formats": ["json", "csv"]
   }
 }

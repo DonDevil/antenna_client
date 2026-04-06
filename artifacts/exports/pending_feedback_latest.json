@@ -1,0 +1,19 @@
+{
+  "schema_version": "client_feedback.v1",
+  "session_id": "3f1a319c-8c29-4802-bd49-039c6f4a8ec2",
+  "trace_id": "02607c52-4ec3-492b-922d-37f2baefe901",
+  "design_id": "design_3f1a319c-8c29-4802-bd49-039c6f4a8ec2",
+  "iteration_index": 0,
+  "simulation_status": "completed",
+  "actual_center_frequency_ghz": 2.055999994278,
+  "actual_bandwidth_mhz": 0.0,
+  "actual_return_loss_db": -0.84189021587372,
+  "actual_vswr": 2.0,
+  "actual_gain_dbi": -11.7853,
+  "artifacts": {
+    "s11_trace_ref": "artifacts/s11_iter0.json",
+    "summary_metrics_ref": "artifacts/exports/summary_metrics.json",
+    "farfield_ref": "artifacts/exports/farfield_verify_full_3_metrics.json",
+    "current_distribution_ref": null
+  }
+}
