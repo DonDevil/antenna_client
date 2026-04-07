@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from pathlib import Path
 from typing import Dict, List, Any
 
@@ -50,6 +51,8 @@ class ExecutionEngine:
         self.results: List[ExecutionResult] = []
         self.cst_app = CSTApp()
         self.dry_run = True
+        self.artifacts: Dict[str, Any] = {}
+        self._scoped_hint_cache: Dict[str, str] = {}
         logger.info("ExecutionEngine initialized")
     
     async def execute_command_package(self, package: CommandPackage) -> List[ExecutionResult]:
@@ -65,6 +68,13 @@ class ExecutionEngine:
             RuntimeError: If execution fails
         """
         self.results = []
+        self.artifacts = {
+            "session_id": package.session_id,
+            "trace_id": package.trace_id,
+            "design_id": package.design_id,
+            "iteration_index": int(package.iteration_index),
+        }
+        self._scoped_hint_cache = {}
         self.dry_run = not self.cst_app.connect()
         logger.info(f"Starting execution of package with {len(package.commands)} commands")
         
@@ -80,12 +90,12 @@ class ExecutionEngine:
                     f"Executing command {i+1}/{len(package.commands)}: "
                     f"{command.seq}:{command.command}"
                 )
-                result = await self._execute_command(command)
+                result = await self._execute_command(command, package)
                 self.results.append(result)
 
                 if not result.success and command.on_failure == "retry_once":
                     logger.warning(f"Retrying command {command.seq}:{command.command} once")
-                    retry_result = await self._execute_command(command)
+                    retry_result = await self._execute_command(command, package)
                     self.results.append(retry_result)
                     result = retry_result
 
@@ -101,7 +111,34 @@ class ExecutionEngine:
         logger.info(f"Execution complete. {sum(1 for r in self.results if r.success)}/{len(self.results)} succeeded")
         return self.results
     
-    async def _execute_command(self, command: Command) -> ExecutionResult:
+    @staticmethod
+    def _sanitize_token(value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return "unknown"
+        return re.sub(r"[^A-Za-z0-9_-]+", "_", text).strip("_") or "unknown"
+
+    def _scoped_destination_hint(self, package: CommandPackage, base_hint: str) -> str:
+        base = self._sanitize_token(base_hint or "artifact")
+        cached = self._scoped_hint_cache.get(base)
+        if cached:
+            return cached
+
+        session_part = self._sanitize_token(package.session_id)[:16]
+        design_part = self._sanitize_token(package.design_id)[:20]
+        scoped = f"{session_part}_iter{int(package.iteration_index)}_{design_part}_{base}"
+        self._scoped_hint_cache[base] = scoped
+        return scoped
+
+    def _record_artifact(self, key: str, path_value: Any) -> None:
+        if not path_value:
+            return
+        try:
+            self.artifacts[key] = str(Path(path_value).resolve())
+        except Exception:
+            self.artifacts[key] = str(path_value)
+
+    async def _execute_command(self, command: Command, package: CommandPackage) -> ExecutionResult:
         """Execute single command
         
         Args:
@@ -145,7 +182,8 @@ class ExecutionEngine:
                 )
 
             if command.command == "export_s_parameters":
-                destination_hint = str(command.params.get("destination_hint", "s11"))
+                base_hint = str(command.params.get("destination_hint", "s11"))
+                destination_hint = self._scoped_destination_hint(package, base_hint)
                 if not self.dry_run:
                     exported_path = self.cst_app.export_s_parameters(destination_hint=destination_hint)
                     if not exported_path:
@@ -154,6 +192,8 @@ class ExecutionEngine:
                             success=False,
                             error="Failed to export S-parameters from CST",
                         )
+                    self._record_artifact("s11_trace_path", exported_path)
+                    self.artifacts["s11_destination_hint"] = destination_hint
                     output = f"Exported S-parameters to {exported_path}"
                 else:
                     output = "Prepared export_s_parameters in dry-run mode"
@@ -166,7 +206,8 @@ class ExecutionEngine:
 
             if command.command == "extract_summary_metrics":
                 if not self.dry_run:
-                    destination_hint = str(command.params.get("destination_hint", "s11"))
+                    base_hint = str(command.params.get("destination_hint", "s11"))
+                    destination_hint = self._scoped_destination_hint(package, base_hint)
                     sparam_path = self.cst_app.export_s_parameters(destination_hint=destination_hint)
                     if not sparam_path:
                         return ExecutionResult(
@@ -181,6 +222,20 @@ class ExecutionEngine:
                             success=False,
                             error="Failed to parse summary metrics from S-parameter export",
                         )
+                    summary_metrics_path = (Path("artifacts") / "exports" / f"{destination_hint}_summary_metrics.json").resolve()
+                    summary_payload = {
+                        "s11_metrics": metrics,
+                        "farfield_metrics": None,
+                        "session_id": package.session_id,
+                        "trace_id": package.trace_id,
+                        "design_id": package.design_id,
+                        "iteration_index": int(package.iteration_index),
+                        "destination_hint": destination_hint,
+                    }
+                    summary_metrics_path.write_text(json.dumps(summary_payload, indent=2), encoding="utf-8")
+                    self._record_artifact("s11_trace_path", sparam_path)
+                    self._record_artifact("summary_metrics_path", summary_metrics_path)
+                    self.artifacts["s11_destination_hint"] = destination_hint
                     output = f"Extracted metrics: {json.dumps(metrics)}"
                 else:
                     output = "Prepared extract_summary_metrics in dry-run mode"
@@ -192,7 +247,8 @@ class ExecutionEngine:
                 )
 
             if command.command == "export_farfield":
-                destination_hint = str(command.params.get("destination_hint", "farfield"))
+                base_hint = str(command.params.get("destination_hint", "farfield"))
+                destination_hint = self._scoped_destination_hint(package, base_hint)
                 frequency_ghz = float(command.params.get("frequency_ghz", 2.4))
                 if not self.dry_run:
                     exported_path = self.cst_app.export_farfield(
@@ -205,7 +261,17 @@ class ExecutionEngine:
                             success=False,
                             error="Failed to export far-field data from CST",
                         )
+                    farfield_metrics_path = (Path("artifacts") / "exports" / f"{destination_hint}_metrics.json").resolve()
+                    farfield_summary_path = (Path("artifacts") / "exports" / f"{destination_hint}_summary.txt").resolve()
+                    farfield_theta_cut_path = (Path("artifacts") / "exports" / f"{destination_hint}_theta_cut.txt").resolve()
+                    farfield_metadata_path = (Path("artifacts") / "exports" / f"{destination_hint}_meta.json").resolve()
                     metrics = self.cst_app.extract_farfield_metrics(destination_hint=destination_hint)
+                    self._record_artifact("farfield_source_path", exported_path)
+                    self._record_artifact("farfield_metrics_path", farfield_metrics_path)
+                    self._record_artifact("farfield_summary_path", farfield_summary_path)
+                    self._record_artifact("farfield_theta_cut_path", farfield_theta_cut_path)
+                    self._record_artifact("farfield_metadata_path", farfield_metadata_path)
+                    self.artifacts["farfield_destination_hint"] = destination_hint
                     if metrics:
                         output = (
                             f"Exported far-field data to {exported_path}; "
@@ -225,7 +291,8 @@ class ExecutionEngine:
                 )
 
             if command.command == "extract_farfield_metrics":
-                destination_hint = str(command.params.get("destination_hint", "farfield"))
+                base_hint = str(command.params.get("destination_hint", "farfield"))
+                destination_hint = self._scoped_destination_hint(package, base_hint)
                 if not self.dry_run:
                     metrics = self.cst_app.extract_farfield_metrics(destination_hint=destination_hint)
                     if not metrics:
@@ -237,6 +304,8 @@ class ExecutionEngine:
                                 "Run export_farfield first for the same destination_hint."
                             ),
                         )
+                    self._record_artifact("farfield_metrics_path", Path("artifacts") / "exports" / f"{destination_hint}_metrics.json")
+                    self.artifacts["farfield_destination_hint"] = destination_hint
                     output = f"Extracted far-field metrics: {json.dumps(metrics)}"
                 else:
                     output = "Prepared extract_farfield_metrics in dry-run mode"
@@ -320,3 +389,7 @@ class ExecutionEngine:
             List of result dictionaries
         """
         return [r.to_dict() for r in self.results]
+
+    def get_artifacts(self) -> Dict[str, Any]:
+        """Get exact artifact paths produced for the current package execution."""
+        return dict(self.artifacts)

@@ -179,7 +179,12 @@ class SessionStore:
         session = self.sessions.get(session_id)
         if session:
             session.results.append(result)
-            session.current_iteration += 1
+            iteration_index = result.get("iteration_index") if isinstance(result, dict) else None
+            if iteration_index is not None:
+                try:
+                    session.current_iteration = int(iteration_index)
+                except (TypeError, ValueError):
+                    pass
             session.updated_at = datetime.now().isoformat()
             self._persist_session(session)
             logger.debug(f"Stored result for session {session_id}")

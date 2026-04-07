@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QObject, QThread, QUrl, Signal, Slot
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import QApplication
 
@@ -134,6 +135,7 @@ class DesignController(QObject):
         self.current_worker: QThread | None = None
         self.connection_worker: QThread | None = None
         self.session_fetch_worker: QThread | None = None
+        self.current_cst_artifacts: dict[str, Any] = {}
         self._feedback_completion_requested = False
         self._is_shutting_down = False
 
@@ -194,32 +196,14 @@ class DesignController(QObject):
 
     @Slot(str)
     def markDone(self, feedbackText: str):
-        if not self.session_id:
-            self.errorOccurred.emit("Active session required before completing")
-            return
-
-        try:
-            payload = json.loads(feedbackText or "{}")
-        except json.JSONDecodeError as e:
-            self.errorOccurred.emit(f"Invalid completion payload: {e}")
-            return
-
-        self._merge_feedback_values_into_last_result(payload)
-        self.current_stage = "completed"
-        self.current_command_package = None
-        self._feedback_completion_requested = False
-        self.session_store.update_session_status(self.session_id, "completed")
-        self.chat_history.append({"sender": "System", "message": "Session marked complete from the QML UI."})
-        self.chatMessageReceived.emit("System", "Session marked complete from the QML UI.")
-        self.resultReceived.emit(self.last_result or self._empty_result_payload())
-        self.statusChanged.emit("Session completed.")
-        self._persist_runtime_snapshot()
+        self._start_feedback_cycle(feedbackText, completion_requested=True)
 
     @Slot()
     def clearDesign(self):
         self.current_design = {}
         self.chat_history = []
         self.last_result = {}
+        self.current_cst_artifacts = {}
         self.session_id = None
         self.trace_id = None
         self.design_id = None
@@ -286,6 +270,25 @@ class DesignController(QObject):
             "current_command_package": self.current_command_package,
         }
         return json.dumps(state, indent=2)
+
+    @Slot(result=str)
+    def currentCstResultsText(self) -> str:
+        return json.dumps(self._build_cst_results_view_model(), indent=2)
+
+    @Slot(str)
+    def openArtifactPath(self, artifactPath: str):
+        target_text = str(artifactPath or "").strip()
+        if not target_text:
+            self.errorOccurred.emit("Artifact path is required")
+            return
+
+        target = Path(target_text)
+        if not target.exists():
+            self.errorOccurred.emit(f"Artifact not found: {target}")
+            return
+
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(target.resolve()))):
+            self.errorOccurred.emit(f"Failed to open artifact: {target}")
 
     @Slot()
     def restoreLatestSession(self):
@@ -455,7 +458,7 @@ class DesignController(QObject):
             from session.design_exporter import DesignExporter
 
             exporter = DesignExporter()
-            export_dir = PROJECT_ROOT / "artifacts" / "exports"
+            export_dir = self._exports_dir()
             export_dir.mkdir(parents=True, exist_ok=True)
             export_path = export_dir / f"qml_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
             payload = {
@@ -466,6 +469,7 @@ class DesignController(QObject):
                 "result": self.last_result,
                 "chat_history": self.chat_history,
                 "current_command_package": self.current_command_package,
+                "cst_results": self._build_cst_results_view_model(),
             }
             if exporter.export_to_json(payload, str(export_path)):
                 self.statusChanged.emit(f"Results exported: {export_path.name}")
@@ -513,6 +517,7 @@ class DesignController(QObject):
         self.current_command_package = optimize_response.command_package
         self.iteration_index = int((optimize_response.command_package or {}).get("iteration_index", 0))
         self.design_id = (optimize_response.command_package or {}).get("design_id") or self.design_id
+        self.current_cst_artifacts = {}
 
         ann_payload = self._ann_prediction_payload(optimize_response)
         if ann_payload:
@@ -541,10 +546,33 @@ class DesignController(QObject):
     def _on_execution_completed(self, payload: dict[str, Any]):
         dry_run = bool(payload.get("dry_run", True))
         progress = payload.get("progress", {}) or {}
+        execution_rows = payload.get("results", []) or []
+        artifacts = payload.get("artifacts", {}) or {}
+        if isinstance(artifacts, dict):
+            self.current_cst_artifacts = dict(artifacts)
         extracted = self._extract_cst_result_payload()
         if extracted:
             self.last_result.update(extracted)
             self.resultReceived.emit(self.last_result)
+
+        expects_farfield = self._expects_farfield_export()
+        farfield_ready = bool(str(self.last_result.get("farfield") or "").strip()) and bool(str(self.last_result.get("gain_db") or "").strip())
+        farfield_failures = [
+            row for row in execution_rows
+            if isinstance(row, dict)
+            and not bool(row.get("success", False))
+            and "farfield" in str(row.get("command_id", "")).lower()
+        ]
+
+        if not dry_run and expects_farfield:
+            if farfield_failures:
+                details = "; ".join(str(row.get("error") or "unknown error") for row in farfield_failures)
+                self.errorOccurred.emit(f"Far-field export/extraction failed: {details}")
+            elif not farfield_ready:
+                self.errorOccurred.emit(
+                    "Far-field results are missing for this iteration. "
+                    "Check far-field monitor setup and export commands in CST."
+                )
 
         if self.session_id:
             self.session_store.store_result(
@@ -556,6 +584,18 @@ class DesignController(QObject):
                     "last_result": dict(self.last_result),
                 },
             )
+            if self.current_cst_artifacts:
+                session = self.session_store.get_session(self.session_id)
+                metadata = dict((session.metadata if session else {}) or {})
+                by_iteration = dict(metadata.get("cst_artifacts_by_iteration") or {})
+                by_iteration[str(self.iteration_index)] = dict(self.current_cst_artifacts)
+                self.session_store.update_session_metadata_map(
+                    self.session_id,
+                    {
+                        "cst_artifacts": dict(self.current_cst_artifacts),
+                        "cst_artifacts_by_iteration": by_iteration,
+                    },
+                )
 
         completed = progress.get("completed", 0)
         total = progress.get("total", 0)
@@ -565,6 +605,17 @@ class DesignController(QObject):
         self.statusChanged.emit(status_text)
         self._persist_runtime_snapshot()
         self.refreshConnections()
+
+    def _expects_farfield_export(self) -> bool:
+        package = self.current_command_package if isinstance(self.current_command_package, dict) else {}
+        commands = package.get("commands") if isinstance(package.get("commands"), list) else []
+        for command in commands:
+            if not isinstance(command, dict):
+                continue
+            name = str(command.get("command") or "").strip().lower()
+            if name in {"export_farfield", "extract_farfield_metrics"}:
+                return True
+        return False
 
     def _start_feedback_cycle(self, feedbackText: str, completion_requested: bool):
         try:
@@ -597,14 +648,23 @@ class DesignController(QObject):
         self.chat_history.append({"sender": "Assistant", "message": f"Server feedback response: {status} (accepted={accepted})."})
         self.chatMessageReceived.emit("Assistant", f"Server feedback response: {status} (accepted={accepted}).")
 
+        if status == "completed":
+            self.current_stage = str(response_data.get("stop_reason") or "completed")
+            self.current_command_package = None
+        elif status in {"refining", "accepted"}:
+            self.current_stage = status
+        elif status:
+            self.current_stage = status
+
         if self.session_id:
-            self.session_store.update_session_status(self.session_id, "completed" if status == "completed" or self._feedback_completion_requested else "active")
+            self.session_store.update_session_status(self.session_id, "completed" if status == "completed" else "active")
 
         next_package = response_data.get("next_command_package")
-        if next_package and not self._feedback_completion_requested:
+        if next_package and status != "completed":
             self.current_command_package = next_package
             self.iteration_index = int(next_package.get("iteration_index", self.iteration_index + 1))
             self.design_id = next_package.get("design_id", self.design_id)
+            self.current_cst_artifacts = {}
             if self.session_id:
                 self.session_store.store_command_package(self.session_id, next_package)
             self.statusChanged.emit("Server returned refinement commands; executing next iteration...")
@@ -613,8 +673,9 @@ class DesignController(QObject):
             worker.error_occurred.connect(self._on_worker_error)
             self._start_worker("current_worker", worker)
         else:
-            final_status = "Session completed." if self._feedback_completion_requested else "Feedback processed."
+            final_status = "Session completed." if status == "completed" else "Feedback processed."
             self.statusChanged.emit(final_status)
+        self._feedback_completion_requested = False
         self._persist_runtime_snapshot()
 
     def _on_session_fetch_received(self, session_payload: dict[str, Any]):
@@ -746,6 +807,7 @@ class DesignController(QObject):
             "current_design": dict(self.current_design),
             "chat_history": list(self.chat_history),
             "last_result": dict(self.last_result),
+            "cst_artifacts": dict(self.current_cst_artifacts),
             "session_name": self.session_name,
             "trace_id": self.trace_id,
             "design_id": self.design_id,
@@ -755,35 +817,19 @@ class DesignController(QObject):
         }
         self.session_store.update_session_metadata_map(self.session_id, metadata)
 
-    def _merge_feedback_values_into_last_result(self, values: dict[str, Any]):
-        if not isinstance(values, dict):
-            return
-
-        field_map = {
-            "actual_frequency": "actual_frequency",
-            "actual_bandwidth": "actual_bandwidth",
-            "actual_gain": "gain_db",
-            "actual_vswr": "vswr",
-            "farfield": "farfield",
-        }
-
-        for source_key, target_key in field_map.items():
-            value = values.get(source_key)
-            if value not in (None, ""):
-                self.last_result[target_key] = str(value)
-
     def _restore_session(self, session: Session):
         metadata = session.metadata or {}
         self.session_id = session.session_id
         self.trace_id = session.trace_id
         self.design_id = session.design_id
         self.session_name = str((session.metadata or {}).get("session_name") or "")
-        self.iteration_index = int(session.current_iteration or metadata.get("iteration_index", 0))
+        self.iteration_index = int(metadata.get("iteration_index", session.current_iteration or 0))
         self.current_stage = str(session.status or metadata.get("current_stage", "recovered"))
         self.current_command_package = metadata.get("command_package") or session.command_package
         self.current_design = dict(metadata.get("current_design", {}))
         self.chat_history = list(metadata.get("chat_history", []))
         self.last_result = dict(metadata.get("last_result", {}))
+        self.current_cst_artifacts = dict(metadata.get("cst_artifacts") or {})
         self.designUpdated.emit(self.current_design)
         self.resultReceived.emit(self.last_result or self._empty_result_payload())
         self.sessionRestored.emit(json.dumps(self._runtime_state_payload()))
@@ -844,7 +890,7 @@ class DesignController(QObject):
             "updated_label": self._format_timestamp(session.updated_at),
             "created_label": self._format_timestamp(session.created_at),
             "current_stage": self._label_text(metadata.get("current_stage") or session.status),
-            "iteration_count": int(session.current_iteration or metadata.get("iteration_index") or 0),
+            "iteration_count": int(metadata.get("iteration_index", session.current_iteration or 0)),
             "chat_count": len(chat_history),
             "result_count": len(session.results),
             "command_count": len(commands),
@@ -968,6 +1014,310 @@ class DesignController(QObject):
         except Exception:
             return None
 
+    @staticmethod
+    def _coerce_path(value: Any) -> Path | None:
+        text = str(value or "").strip()
+        return Path(text) if text else None
+
+    @staticmethod
+    def _artifact_item(label: str, path: Path | None) -> dict[str, Any]:
+        if path is None:
+            return {"label": label, "path": "", "exists": False}
+
+        try:
+            exists = path.exists()
+        except OSError:
+            exists = False
+
+        display_path = path.resolve() if exists else path
+        return {
+            "label": label,
+            "path": str(display_path),
+            "exists": exists,
+        }
+
+    def _exports_dir(self) -> Path:
+        return (PROJECT_ROOT / "artifacts" / "exports").resolve()
+
+    def _latest_export_file(self, patterns: list[str], exclude_names: set[str] | None = None) -> Path | None:
+        exports_dir = self._exports_dir()
+        if not exports_dir.exists():
+            return None
+
+        excluded = {name.lower() for name in (exclude_names or set()) if name}
+        ranked: list[tuple[float, Path]] = []
+        seen: set[str] = set()
+
+        for pattern in patterns:
+            for candidate in exports_dir.glob(pattern):
+                try:
+                    if not candidate.is_file():
+                        continue
+                    if candidate.name.lower() in excluded:
+                        continue
+                    resolved = str(candidate.resolve()).lower()
+                    if resolved in seen:
+                        continue
+                    seen.add(resolved)
+                    ranked.append((candidate.stat().st_mtime, candidate))
+                except OSError:
+                    continue
+
+        if not ranked:
+            return None
+
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        return ranked[0][1]
+
+    def _session_cst_artifacts(self) -> dict[str, Any]:
+        # Prefer artifacts tied to the active session and iteration.
+        if self.current_cst_artifacts:
+            return dict(self.current_cst_artifacts)
+
+        if not self.session_id:
+            return {}
+
+        session = self.session_store.get_session(self.session_id)
+        if not session:
+            return {}
+
+        metadata = dict(session.metadata or {})
+        by_iteration = metadata.get("cst_artifacts_by_iteration") or {}
+        if isinstance(by_iteration, dict):
+            current_key = str(self.iteration_index)
+            if current_key in by_iteration and isinstance(by_iteration[current_key], dict):
+                return dict(by_iteration[current_key])
+            if by_iteration:
+                try:
+                    sorted_keys = sorted(by_iteration.keys(), key=lambda v: int(str(v)))
+                except Exception:
+                    sorted_keys = sorted(by_iteration.keys())
+                for key in reversed(sorted_keys):
+                    candidate = by_iteration.get(key)
+                    if isinstance(candidate, dict):
+                        return dict(candidate)
+
+        candidate = metadata.get("cst_artifacts")
+        return dict(candidate) if isinstance(candidate, dict) else {}
+
+    def _build_cst_artifact_summary(self) -> dict[str, Any]:
+        session_artifacts = self._session_cst_artifacts()
+        has_session_artifacts = bool(session_artifacts)
+
+        s11_trace_path = self._coerce_path(session_artifacts.get("s11_trace_path"))
+        summary_metrics_path = self._coerce_path(session_artifacts.get("summary_metrics_path"))
+        farfield_source_path = self._coerce_path(session_artifacts.get("farfield_source_path"))
+        farfield_summary_path = self._coerce_path(session_artifacts.get("farfield_summary_path"))
+        farfield_theta_cut_path = self._coerce_path(session_artifacts.get("farfield_theta_cut_path"))
+        farfield_metrics_file = self._coerce_path(session_artifacts.get("farfield_metrics_path"))
+        farfield_metadata_path = self._coerce_path(session_artifacts.get("farfield_metadata_path"))
+
+        sparam_metrics: dict[str, Any] | None = None
+        farfield_metrics: dict[str, Any] | None = None
+
+        if summary_metrics_path and summary_metrics_path.exists():
+            sparam_metrics = self._load_json_file(summary_metrics_path)
+
+        if not sparam_metrics and s11_trace_path and s11_trace_path.exists():
+            computed = CSTApp.extract_summary_metrics(str(s11_trace_path))
+            if computed:
+                sparam_metrics = {"s11_metrics": computed, "farfield_metrics": None}
+
+        if farfield_metrics_file and farfield_metrics_file.exists():
+            farfield_metrics = self._load_json_file(farfield_metrics_file)
+
+        if not sparam_metrics and not has_session_artifacts:
+            fallback_sparam_path, fallback_sparam_metrics = self._load_latest_sparam_metrics()
+            if fallback_sparam_metrics:
+                sparam_metrics = fallback_sparam_metrics
+                if not summary_metrics_path and fallback_sparam_path and fallback_sparam_path.suffix.lower() == ".json":
+                    summary_metrics_path = fallback_sparam_path
+                if not s11_trace_path and fallback_sparam_path and fallback_sparam_path.suffix.lower() == ".txt":
+                    s11_trace_path = fallback_sparam_path
+
+        if not farfield_metrics and not has_session_artifacts:
+            fallback_farfield_path, fallback_farfield_metrics = self._load_latest_farfield_metrics()
+            if fallback_farfield_metrics:
+                farfield_metrics = fallback_farfield_metrics
+                if not farfield_metrics_file:
+                    farfield_metrics_file = fallback_farfield_path
+
+        s11_metrics = self._extract_s11_metrics(sparam_metrics)
+
+        farfield_data = farfield_metrics if isinstance(farfield_metrics, dict) else {}
+        farfield_summary_path = farfield_summary_path or self._coerce_path(farfield_data.get("summary_file"))
+        farfield_theta_cut_path = farfield_theta_cut_path or self._coerce_path(farfield_data.get("theta_cut_file"))
+        excluded_farfield_names = {
+            path.name.lower()
+            for path in (farfield_summary_path, farfield_theta_cut_path)
+            if path is not None
+        }
+        farfield_source_path = farfield_source_path or self._coerce_path(farfield_data.get("source_file"))
+        farfield_summary_path = farfield_summary_path or self._coerce_path(farfield_data.get("summary_file"))
+        farfield_theta_cut_path = farfield_theta_cut_path or self._coerce_path(farfield_data.get("theta_cut_file"))
+        farfield_metrics_file = farfield_metrics_file or self._coerce_path(farfield_data.get("metrics_file"))
+
+        if not has_session_artifacts:
+            farfield_source_path = farfield_source_path or self._latest_export_file(["ff_source.txt", "farfield*.txt"], exclude_names=excluded_farfield_names)
+            farfield_summary_path = farfield_summary_path or self._latest_export_file(["*_summary.txt", "ff_summary.txt"])
+            farfield_theta_cut_path = farfield_theta_cut_path or self._latest_export_file(["*_theta_cut.txt", "ff_cut_theta.txt"])
+            farfield_metadata_path = farfield_metadata_path or self._latest_export_file(["*_meta.json"])
+            summary_metrics_path = summary_metrics_path or self._latest_export_file(["summary_metrics*.json"])
+            s11_trace_path = s11_trace_path or self._latest_export_file(["s11.txt", "*s11*.txt"])
+
+        exports_dir = self._exports_dir()
+        return {
+            "exports_dir": exports_dir if exports_dir.exists() else None,
+            "s11_metrics": s11_metrics,
+            "summary_metrics_path": summary_metrics_path,
+            "s11_trace_path": s11_trace_path,
+            "farfield_metrics": farfield_data or None,
+            "farfield_metrics_path": farfield_metrics_file,
+            "farfield_source_path": farfield_source_path,
+            "farfield_summary_path": farfield_summary_path,
+            "farfield_theta_cut_path": farfield_theta_cut_path,
+            "farfield_metadata_path": farfield_metadata_path,
+        }
+
+    def _build_cst_results_view_model(self) -> dict[str, Any]:
+        summary = self._build_cst_artifact_summary()
+        s11_metrics = summary["s11_metrics"]
+        farfield_metrics = summary.get("farfield_metrics") or {}
+
+        latest_result_fields = [
+            {
+                "label": "Actual Frequency",
+                "value": self._display_measurement(self.last_result.get("actual_frequency"), "GHz", decimals=2),
+            },
+            {
+                "label": "Actual Bandwidth",
+                "value": self._display_measurement(self.last_result.get("actual_bandwidth"), "MHz", decimals=0),
+            },
+            {
+                "label": "Gain",
+                "value": self._display_measurement(self.last_result.get("gain_db"), "dBi", decimals=2),
+            },
+            {
+                "label": "VSWR",
+                "value": self._display_measurement(self.last_result.get("vswr"), "", decimals=2),
+            },
+            {
+                "label": "Far-Field Tag",
+                "value": self._display_measurement(self.last_result.get("farfield"), "", decimals=2),
+            },
+        ]
+        latest_result_fields = [field for field in latest_result_fields if field["value"] != "-"]
+
+        sections = [
+            {
+                "title": "S11 Metrics",
+                "fields": [
+                    {
+                        "label": "Center Frequency",
+                        "value": self._display_measurement(s11_metrics.get("center_frequency"), "GHz", decimals=2),
+                    },
+                    {
+                        "label": "Bandwidth",
+                        "value": self._display_measurement(s11_metrics.get("bandwidth_mhz"), "MHz", decimals=1),
+                    },
+                    {
+                        "label": "Return Loss",
+                        "value": self._display_measurement(s11_metrics.get("return_loss_db"), "dB", decimals=2),
+                    },
+                    {
+                        "label": "VSWR",
+                        "value": self._display_measurement(s11_metrics.get("vswr"), "", decimals=2),
+                    },
+                ],
+            },
+            {
+                "title": "Far-Field Metrics",
+                "fields": [
+                    {
+                        "label": "Maximum Realized Gain",
+                        "value": self._display_measurement(farfield_metrics.get("max_realized_gain_dbi"), "dBi", decimals=2),
+                    },
+                    {
+                        "label": "Maximum Gain",
+                        "value": self._display_measurement(farfield_metrics.get("max_gain_dbi"), "dBi", decimals=2),
+                    },
+                    {
+                        "label": "Maximum Directivity",
+                        "value": self._display_measurement(farfield_metrics.get("max_directivity_dbi"), "dBi", decimals=2),
+                    },
+                    {
+                        "label": "Main Lobe Direction",
+                        "value": self._display_measurement(farfield_metrics.get("main_lobe_direction_deg"), "deg", decimals=1),
+                    },
+                    {
+                        "label": "3 dB Beamwidth",
+                        "value": self._display_measurement(farfield_metrics.get("beamwidth_3db_deg"), "deg", decimals=1),
+                    },
+                    {
+                        "label": "Front-to-Back Ratio",
+                        "value": self._display_measurement(farfield_metrics.get("front_to_back_ratio_db"), "dB", decimals=2),
+                    },
+                    {
+                        "label": "Radiation Efficiency",
+                        "value": self._display_measurement(farfield_metrics.get("radiation_efficiency_db"), "dB", decimals=2),
+                    },
+                    {
+                        "label": "Total Efficiency",
+                        "value": self._display_measurement(farfield_metrics.get("total_efficiency_db"), "dB", decimals=2),
+                    },
+                ],
+            },
+        ]
+
+        if latest_result_fields:
+            sections.insert(0, {"title": "Latest Result Snapshot", "fields": latest_result_fields})
+
+        artifacts = [
+            self._artifact_item("Exports Directory", summary.get("exports_dir")),
+            self._artifact_item("S11 Trace", summary.get("s11_trace_path")),
+            self._artifact_item("S11 Summary Metrics", summary.get("summary_metrics_path")),
+            self._artifact_item("Far-Field Source", summary.get("farfield_source_path")),
+            self._artifact_item("Far-Field Summary", summary.get("farfield_summary_path")),
+            self._artifact_item("Far-Field Theta Cut", summary.get("farfield_theta_cut_path")),
+            self._artifact_item("Far-Field Metrics JSON", summary.get("farfield_metrics_path")),
+            self._artifact_item("Far-Field Metadata", summary.get("farfield_metadata_path")),
+        ]
+
+        deduped_artifacts: list[dict[str, Any]] = []
+        seen_paths: set[tuple[str, str]] = set()
+        for item in artifacts:
+            key = (item["label"], item["path"])
+            if key in seen_paths:
+                continue
+            seen_paths.add(key)
+            deduped_artifacts.append(item)
+
+        has_metrics = any(
+            value is not None
+            for value in (
+                s11_metrics.get("center_frequency"),
+                s11_metrics.get("bandwidth_mhz"),
+                s11_metrics.get("return_loss_db"),
+                s11_metrics.get("vswr"),
+                farfield_metrics.get("max_realized_gain_dbi"),
+                farfield_metrics.get("max_gain_dbi"),
+                farfield_metrics.get("beamwidth_3db_deg"),
+            )
+        )
+        has_artifacts = any(item["exists"] for item in deduped_artifacts)
+        available = has_metrics or has_artifacts
+
+        return {
+            "available": available,
+            "message": (
+                "Latest CST exports loaded from artifacts/exports."
+                if available
+                else "No CST exports available yet. Run a CST simulation and export step first."
+            ),
+            "sections": sections,
+            "artifacts": deduped_artifacts,
+        }
+
     def _load_latest_sparam_metrics(self) -> tuple[Path | None, dict[str, Any] | None]:
         exports_dir = (PROJECT_ROOT / "artifacts" / "exports").resolve()
         if not exports_dir.exists():
@@ -1036,9 +1386,9 @@ class DesignController(QObject):
         }
 
     def _extract_cst_result_payload(self) -> dict[str, str]:
-        _, sparam_metrics = self._load_latest_sparam_metrics()
-        _, farfield_metrics = self._load_latest_farfield_metrics()
-        s11 = self._extract_s11_metrics(sparam_metrics)
+        summary = self._build_cst_artifact_summary()
+        s11 = summary["s11_metrics"]
+        farfield_metrics = summary.get("farfield_metrics") or {}
 
         gain_value = None
         farfield_value = ""
@@ -1050,6 +1400,9 @@ class DesignController(QObject):
                 farfield_value = "OK"
 
         result = dict(self.last_result)
+        # Reset auto-extracted fields first so failed extraction doesn't leak stale values.
+        for key in ("actual_frequency", "actual_bandwidth", "vswr", "gain_db", "farfield"):
+            result[key] = ""
         center_frequency = s11.get("center_frequency")
         bandwidth_mhz = s11.get("bandwidth_mhz")
         vswr = s11.get("vswr")
@@ -1070,18 +1423,19 @@ class DesignController(QObject):
         actual_bandwidth = float(values.get("actual_bandwidth") or self.last_result.get("actual_bandwidth") or 0.0)
         actual_gain = float(values.get("actual_gain") or self.last_result.get("gain_db") or 0.0)
         actual_vswr = float(values.get("actual_vswr") or self.last_result.get("vswr") or 1.5)
+        cst_summary = self._build_cst_artifact_summary()
 
         if actual_frequency <= 0 or actual_bandwidth < 0:
             raise ValueError("Feedback requires valid actual frequency and bandwidth values")
 
         actual_return_loss_db = values.get("actual_return_loss_db")
         if actual_return_loss_db in (None, ""):
-            _, sparam_metrics = self._load_latest_sparam_metrics()
-            s11 = self._extract_s11_metrics(sparam_metrics)
+            s11 = cst_summary["s11_metrics"]
             actual_return_loss_db = s11.get("return_loss_db") or 18.0
 
-        sparam_path, _ = self._load_latest_sparam_metrics()
-        farfield_path, _ = self._load_latest_farfield_metrics()
+        s11_trace_path = cst_summary.get("s11_trace_path") or cst_summary.get("summary_metrics_path")
+        summary_metrics_path = cst_summary.get("summary_metrics_path") or cst_summary.get("s11_trace_path")
+        farfield_path = cst_summary.get("farfield_metrics_path") or cst_summary.get("farfield_source_path")
 
         return {
             "schema_version": "client_feedback.v1",
@@ -1090,6 +1444,7 @@ class DesignController(QObject):
             "design_id": self.design_id,
             "iteration_index": self.iteration_index,
             "simulation_status": "completed",
+            "completion_requested": completion_requested,
             "actual_center_frequency_ghz": actual_frequency,
             "actual_bandwidth_mhz": actual_bandwidth,
             "actual_return_loss_db": float(actual_return_loss_db),
@@ -1101,12 +1456,17 @@ class DesignController(QObject):
                 else "User submitted CST feedback from the QML UI."
             ),
             "artifacts": {
-                "s11_trace_ref": str(sparam_path.resolve()) if sparam_path else None,
-                "summary_metrics_ref": str(sparam_path.resolve()) if sparam_path else None,
+                "s11_trace_ref": str(s11_trace_path.resolve()) if s11_trace_path else None,
+                "summary_metrics_ref": str(summary_metrics_path.resolve()) if summary_metrics_path else None,
                 "farfield_ref": str(farfield_path.resolve()) if farfield_path else None,
                 "current_distribution_ref": None,
             },
         }
+
+    @classmethod
+    def _display_measurement(cls, value: Any, unit: str, decimals: int = 2) -> str:
+        formatted = cls._format_measurement(value, unit, decimals=decimals)
+        return formatted or "-"
 
     @staticmethod
     def _empty_result_payload() -> dict[str, str]:

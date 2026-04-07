@@ -260,32 +260,39 @@ class CSTApp:
         theta_cut_path = Path(theta_cut_file)
         source_path = Path(source_file) if source_file else None
 
-        if not summary_path.exists() or not theta_cut_path.exists():
+        if not summary_path.exists():
             return None
 
         summary_text = summary_path.read_text(encoding="utf-8", errors="ignore")
-        theta_text = theta_cut_path.read_text(encoding="utf-8", errors="ignore")
+        points: list[tuple[float, float]] = []
+        if theta_cut_path.exists():
+            theta_text = theta_cut_path.read_text(encoding="utf-8", errors="ignore")
+            points = CSTApp._parse_theta_cut_points(theta_text)
 
-        points = CSTApp._parse_theta_cut_points(theta_text)
-        if not points:
-            return None
+        main_lobe_direction_deg = None
+        max_cut_gain_dbi = None
+        beamwidth_3db_deg = None
+        back_theta = None
+        back_gain = None
+        front_to_back_ratio_db = None
 
-        max_idx = max(range(len(points)), key=lambda i: points[i][1])
-        main_lobe_direction_deg = points[max_idx][0]
-        max_cut_gain_dbi = points[max_idx][1]
-        threshold = max_cut_gain_dbi - 3.0
+        if points:
+            max_idx = max(range(len(points)), key=lambda i: points[i][1])
+            main_lobe_direction_deg = points[max_idx][0]
+            max_cut_gain_dbi = points[max_idx][1]
+            threshold = max_cut_gain_dbi - 3.0
 
-        left = max_idx
-        while left > 0 and points[left][1] >= threshold:
-            left -= 1
-        right = max_idx
-        while right < len(points) - 1 and points[right][1] >= threshold:
-            right += 1
-        beamwidth_3db_deg = max(points[right][0] - points[left][0], 0.0)
+            left = max_idx
+            while left > 0 and points[left][1] >= threshold:
+                left -= 1
+            right = max_idx
+            while right < len(points) - 1 and points[right][1] >= threshold:
+                right += 1
+            beamwidth_3db_deg = max(points[right][0] - points[left][0], 0.0)
 
-        opposite_angle = (main_lobe_direction_deg + 180.0) % 360.0
-        back_theta, back_gain = min(points, key=lambda p: abs(p[0] - opposite_angle))
-        front_to_back_ratio_db = max_cut_gain_dbi - back_gain
+            opposite_angle = (main_lobe_direction_deg + 180.0) % 360.0
+            back_theta, back_gain = min(points, key=lambda p: abs(p[0] - opposite_angle))
+            front_to_back_ratio_db = max_cut_gain_dbi - back_gain
 
         metrics = {
             "main_lobe_direction_deg": main_lobe_direction_deg,
@@ -299,10 +306,16 @@ class CSTApp:
             "theta_cut_peak_gain_dbi": max_cut_gain_dbi,
             "theta_cut_back_gain_dbi": back_gain,
             "theta_cut_back_theta_deg": back_theta,
+            "theta_cut_available": bool(points),
             "summary_file": str(summary_path.resolve()),
-            "theta_cut_file": str(theta_cut_path.resolve()),
+            "theta_cut_file": str(theta_cut_path.resolve()) if theta_cut_path.exists() else None,
             "source_file": str(source_path.resolve()) if source_path and source_path.exists() else None,
         }
+        if not points:
+            metrics["warning"] = (
+                "Theta-cut export is unavailable. "
+                "Summary-based far-field metrics were extracted without beamwidth/front-to-back values."
+            )
         return metrics
 
     def extract_farfield_metrics(self, destination_hint: str = "farfield") -> Optional[dict]:
@@ -373,11 +386,29 @@ class CSTApp:
                 farfield_plot.Phi("0")
                 farfield_plot.Step("5")
                 farfield_plot.Plot()
-                cut_name = f"{destination_hint}_theta_cut"
-                farfield_plot.CopyFarfieldTo1DResults(r"1D Results\Farfields", cut_name)
-                cut_tree_item = rf"1D Results\1D Results\Farfields\{cut_name}"
-                self.mws.SelectTreeItem(cut_tree_item)
-                self.mws.StoreCurvesInASCIIFile(str(cut_path.resolve()))
+                theta_cut_exported = False
+                theta_cut_error = None
+                try:
+                    cut_name = f"{destination_hint}_theta_cut"
+                    farfield_plot.CopyFarfieldTo1DResults(r"1D Results\Farfields", cut_name)
+                    cut_candidates = [
+                        rf"1D Results\1D Results\Farfields\{cut_name}",
+                        rf"1D Results\Farfields\{cut_name}",
+                    ]
+                    for cut_tree_item in cut_candidates:
+                        try:
+                            self.mws.SelectTreeItem(cut_tree_item)
+                            self.mws.StoreCurvesInASCIIFile(str(cut_path.resolve()))
+                            if cut_path.exists() and cut_path.stat().st_size > 0:
+                                theta_cut_exported = True
+                                break
+                        except Exception:
+                            continue
+                    if not theta_cut_exported:
+                        theta_cut_error = "Theta-cut copy/export did not produce a curve file"
+                except Exception as exc:
+                    theta_cut_error = str(exc)
+                    logger.warning(f"Far-field theta-cut export unavailable for '{item}': {exc}")
 
                 if source_path.exists() and source_path.stat().st_size > 0:
                     farfield_metrics = self.extract_farfield_metrics(destination_hint=destination_hint)
@@ -386,7 +417,9 @@ class CSTApp:
                         "selected_tree_item": item,
                         "source_export_path": str(source_path.resolve()),
                         "summary_export_path": str(summary_path.resolve()),
-                        "theta_cut_export_path": str(cut_path.resolve()),
+                        "theta_cut_export_path": str(cut_path.resolve()) if theta_cut_exported else None,
+                        "theta_cut_exported": theta_cut_exported,
+                        "theta_cut_error": theta_cut_error,
                         "metrics_export_path": (
                             str(Path(farfield_metrics["metrics_file"]).resolve())
                             if farfield_metrics and farfield_metrics.get("metrics_file")

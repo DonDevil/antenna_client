@@ -218,6 +218,7 @@ class CommandExecutionWorker(_BaseWorker):
             "dry_run": engine.dry_run,
             "results": [result.to_dict() for result in results],
             "progress": engine.get_progress(),
+            "artifacts": engine.get_artifacts(),
         }
 
 

@@ -7,7 +7,7 @@
   },
   "cst": {
     "executable_path": "C:\\Program Files (x86)\\CST Studio Suite 2024\\CST DESIGN ENVIRONMENT.exe",
-    "project_dir": "E:\\antenna",
+    "project_dir": "E:\\antenna\\app",
     "default_units": "mm",
     "frequency_units": "ghz",
     "auto_save": true,

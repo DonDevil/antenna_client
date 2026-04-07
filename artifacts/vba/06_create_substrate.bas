@@ -3,8 +3,8 @@ With Brick
     .Name "substrate"
     .Component "component1"
     .Material "Rogers_RT_duroid_5880"
-    .Xrange "-25.781898498535156", "25.781898498535156"
-    .Yrange "-27.74700355529785", "27.74700355529785"
-    .Zrange "0.0", "4.5361480712890625"
+    .Xrange "-28.059541702270508", "28.059541702270508"
+    .Yrange "-30.31174087524414", "30.31174087524414"
+    .Zrange "0.0", "4.29295015335083"
     .Create
 End With

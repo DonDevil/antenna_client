@@ -29,12 +29,16 @@ ApplicationWindow {
     property string configPageText: ""
     property string configLoadError: ""
     property string stateLoadError: ""
+    property string cstResultsError: ""
+    property string cstResultsMessage: ""
     property bool annConnected: false
     property bool llmConnected: false
     property bool cstConnected: false
     property bool commConnected: false
     property var historyCache: []
     property var stateSections: []
+    property var cstResultsSections: []
+    property var cstArtifactItems: []
     property var configSections: []
 
     ListModel {
@@ -143,6 +147,26 @@ ApplicationWindow {
         })
 
         stateSections = sections
+    }
+
+    function loadCstResultsSections() {
+        cstResultsError = ""
+        cstResultsMessage = ""
+        cstResultsSections = []
+        cstArtifactItems = []
+
+        var payload = designController.currentCstResultsText()
+        var data = {}
+        try {
+            data = JSON.parse(payload)
+        } catch (error) {
+            cstResultsError = "Unable to read CST export data"
+            return
+        }
+
+        cstResultsMessage = String(data.message || "")
+        cstResultsSections = data.sections || []
+        cstArtifactItems = data.artifacts || []
     }
 
     function buildConfigField(label, value, path) {
@@ -625,6 +649,25 @@ ApplicationWindow {
             }
 
             Rectangle {
+                width: 72
+                height: 24
+                color: "transparent"
+                Text {
+                    anchors.centerIn: parent
+                    text: "Results"
+                    font.pixelSize: 30 * 0.45
+                    color: "#1f1f1f"
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: {
+                        root.loadCstResultsSections()
+                        cstResultsPopup.open()
+                    }
+                }
+            }
+
+            Rectangle {
                 width: 62
                 height: 24
                 color: "transparent"
@@ -923,6 +966,195 @@ ApplicationWindow {
                                                 color: "#111"
                                                 wrapMode: Text.WrapAnywhere
                                             }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Popup {
+            id: cstResultsPopup
+            anchors.centerIn: Overlay.overlay
+            width: 760
+            height: 500
+            modal: true
+            focus: true
+            padding: 12
+            background: Rectangle {
+                color: "#efefef"
+                border.width: 1
+                border.color: "#777"
+            }
+
+            Column {
+                anchors.fill: parent
+                spacing: 8
+
+                Row {
+                    width: parent.width
+                    spacing: 8
+
+                    Text {
+                        width: parent.width - 250
+                        text: "CST Results"
+                        font.pixelSize: 16
+                        color: "#111"
+                    }
+
+                    Button {
+                        width: 70
+                        text: "Refresh"
+                        onClicked: root.loadCstResultsSections()
+                    }
+
+                    Button {
+                        width: 90
+                        text: "Export"
+                        onClicked: designController.exportResults()
+                    }
+
+                    Button {
+                        width: 60
+                        text: "Close"
+                        onClicked: cstResultsPopup.close()
+                    }
+                }
+
+                Text {
+                    width: parent.width
+                    visible: cstResultsError.length > 0
+                    text: cstResultsError
+                    font.pixelSize: 12
+                    color: "#b00020"
+                    wrapMode: Text.WordWrap
+                }
+
+                Text {
+                    width: parent.width
+                    visible: cstResultsError.length === 0 && cstResultsMessage.length > 0
+                    text: cstResultsMessage
+                    font.pixelSize: 12
+                    color: "#333"
+                    wrapMode: Text.WordWrap
+                }
+
+                ScrollView {
+                    width: parent.width
+                    height: parent.height - 48 - ((cstResultsError.length > 0 || cstResultsMessage.length > 0) ? 24 : 0)
+
+                    Column {
+                        width: cstResultsPopup.width - 40
+                        spacing: 12
+
+                        Repeater {
+                            model: cstResultsSections
+
+                            delegate: Rectangle {
+                                width: parent.width
+                                color: "#f7f7f8"
+                                border.width: 1
+                                border.color: "#d0d4db"
+                                radius: 4
+                                implicitHeight: cstSectionColumn.implicitHeight + 20
+
+                                Column {
+                                    id: cstSectionColumn
+                                    x: 12
+                                    y: 10
+                                    width: parent.width - 24
+                                    spacing: 8
+
+                                    Text {
+                                        width: parent.width
+                                        text: modelData.title
+                                        font.pixelSize: 15
+                                        font.bold: true
+                                        color: "#111"
+                                    }
+
+                                    Repeater {
+                                        model: modelData.fields
+
+                                        delegate: Row {
+                                            width: parent.width
+                                            spacing: 12
+
+                                            Text {
+                                                width: 210
+                                                text: modelData.label
+                                                font.pixelSize: 12
+                                                color: "#444"
+                                                wrapMode: Text.WordWrap
+                                            }
+
+                                            Text {
+                                                width: parent.width - 222
+                                                text: modelData.value
+                                                font.pixelSize: 12
+                                                color: "#111"
+                                                wrapMode: Text.WrapAnywhere
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            width: parent.width
+                            color: "#f7f7f8"
+                            border.width: 1
+                            border.color: "#d0d4db"
+                            radius: 4
+                            implicitHeight: artifactSectionColumn.implicitHeight + 20
+
+                            Column {
+                                id: artifactSectionColumn
+                                x: 12
+                                y: 10
+                                width: parent.width - 24
+                                spacing: 8
+
+                                Text {
+                                    width: parent.width
+                                    text: "Artifacts"
+                                    font.pixelSize: 15
+                                    font.bold: true
+                                    color: "#111"
+                                }
+
+                                Repeater {
+                                    model: cstArtifactItems
+
+                                    delegate: Row {
+                                        width: parent.width
+                                        spacing: 12
+
+                                        Text {
+                                            width: 170
+                                            text: modelData.label
+                                            font.pixelSize: 12
+                                            color: "#444"
+                                            wrapMode: Text.WordWrap
+                                        }
+
+                                        Text {
+                                            width: parent.width - 266
+                                            text: modelData.path.length > 0 ? modelData.path : "Not available"
+                                            font.pixelSize: 12
+                                            color: modelData.exists ? "#111" : "#777"
+                                            wrapMode: Text.WrapAnywhere
+                                        }
+
+                                        Button {
+                                            width: 72
+                                            text: modelData.exists ? "Open" : "Missing"
+                                            enabled: modelData.exists
+                                            onClicked: designController.openArtifactPath(modelData.path)
                                         }
                                     }
                                 }

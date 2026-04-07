@@ -47,7 +47,10 @@ def _to_vswr_from_return_loss(return_loss_db: float) -> float:
     gamma = 10 ** (-return_loss_db / 20.0)
     if gamma >= 1.0:
         return 99.0
-    return (1.0 + gamma) / (1.0 - gamma)
+    vswr = (1.0 + gamma) / (1.0 - gamma)
+    if vswr > 100.0:
+        return 99.0
+    return vswr
 
 
 def _resolve_s11_metrics(package: CommandPackage) -> tuple[Optional[dict[str, Any]], Optional[Path]]:
@@ -94,8 +97,8 @@ def _build_feedback_payload(
     center_frequency_ghz = float((s11_metrics or {}).get("center_frequency", 2.45))
     bandwidth_ghz = float((s11_metrics or {}).get("bandwidth", 0.1))
     min_s11_db = float((s11_metrics or {}).get("min_s11_db", -10.0))
-    return_loss_db = abs(min_s11_db)
-    vswr = _to_vswr_from_return_loss(return_loss_db)
+    return_loss_db = min_s11_db
+    vswr = _to_vswr_from_return_loss(abs(min_s11_db))
 
     gain_dbi = 0.0
     if farfield_metrics:
@@ -127,6 +130,30 @@ def _build_feedback_payload(
     }
 
     return payload
+
+
+def _resolve_metrics_from_execution_artifacts(
+    artifacts: dict[str, Any],
+) -> tuple[Optional[dict[str, Any]], Optional[Path], Optional[dict[str, Any]], Optional[Path]]:
+    s11_path = Path(str(artifacts.get("s11_trace_path"))).resolve() if artifacts.get("s11_trace_path") else None
+    farfield_metrics_path = (
+        Path(str(artifacts.get("farfield_metrics_path"))).resolve()
+        if artifacts.get("farfield_metrics_path")
+        else None
+    )
+
+    s11_metrics = None
+    if s11_path and s11_path.exists():
+        s11_metrics = CSTApp.extract_summary_metrics(str(s11_path))
+
+    farfield_metrics = None
+    if farfield_metrics_path and farfield_metrics_path.exists():
+        try:
+            farfield_metrics = json.loads(farfield_metrics_path.read_text(encoding="utf-8"))
+        except Exception:
+            farfield_metrics = None
+
+    return s11_metrics, s11_path, farfield_metrics, farfield_metrics_path
 
 
 async def run_once() -> int:
@@ -200,6 +227,7 @@ async def run_once() -> int:
         engine = ExecutionEngine()
         execution_results = await engine.execute_command_package(package)
         exec_progress = engine.get_progress()
+        execution_artifacts = engine.get_artifacts()
 
         iteration_report: dict[str, Any] = {
             "loop_index": loop_index,
@@ -209,6 +237,7 @@ async def run_once() -> int:
                 "dry_run": engine.dry_run,
                 "progress": exec_progress,
                 "results": [r.to_dict() for r in execution_results],
+                "artifacts": execution_artifacts,
             },
         }
 
@@ -233,8 +262,9 @@ async def run_once() -> int:
                 + ", ".join(r.command_id for r in non_optional_failed)
             )
 
-        s11_metrics, s11_path = _resolve_s11_metrics(package)
-        farfield_metrics, farfield_metrics_path = _resolve_farfield_metrics(package)
+        s11_metrics, s11_path, farfield_metrics, farfield_metrics_path = _resolve_metrics_from_execution_artifacts(
+            execution_artifacts
+        )
 
         summary_metrics_path = EXPORTS_DIR / f"summary_metrics_iter{loop_index}.json"
         summary_metrics = {
@@ -242,6 +272,9 @@ async def run_once() -> int:
             "farfield_metrics": farfield_metrics,
         }
         summary_metrics_path.write_text(json.dumps(summary_metrics, indent=2), encoding="utf-8")
+
+        if not s11_path:
+            raise RuntimeError("Missing s11_trace_path from execution artifacts; cannot build valid feedback payload")
 
         logger.info(f"STEP 4/4: Send feedback for iteration {loop_index}")
         feedback_payload = _build_feedback_payload(

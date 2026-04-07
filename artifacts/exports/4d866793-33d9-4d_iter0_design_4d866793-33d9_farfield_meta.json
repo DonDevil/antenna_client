@@ -1,0 +1,10 @@
+{
+  "requested_frequency_ghz": 2.45,
+  "selected_tree_item": "Farfields\\farfield_2p450ghz [1]",
+  "source_export_path": "E:\\antenna_client\\artifacts\\exports\\4d866793-33d9-4d_iter0_design_4d866793-33d9_farfield.txt",
+  "summary_export_path": "E:\\antenna_client\\artifacts\\exports\\4d866793-33d9-4d_iter0_design_4d866793-33d9_farfield_summary.txt",
+  "theta_cut_export_path": "E:\\antenna_client\\artifacts\\exports\\4d866793-33d9-4d_iter0_design_4d866793-33d9_farfield_theta_cut.txt",
+  "theta_cut_exported": true,
+  "theta_cut_error": null,
+  "metrics_export_path": "E:\\antenna_client\\artifacts\\exports\\4d866793-33d9-4d_iter0_design_4d866793-33d9_farfield_metrics.json"
+}

@@ -4,8 +4,8 @@
   "design_id": "design_e9de6d49-239b-4b90-85e7-cfe55ea60d0e",
   "user_request": "create an microstrip patch antenna with 1ghz frwquencya d 150mhz bandwidth",
   "created_at": "2026-04-07T13:09:46.552095",
-  "updated_at": "2026-04-07T14:25:49.794171",
-  "status": "active",
+  "updated_at": "2026-04-07T15:40:30.822243",
+  "status": "completed",
   "current_iteration": 0,
   "command_package": null,
   "results": [],
@@ -49,6 +49,10 @@
       {
         "sender": "Assistant",
         "message": "Simulation finished; CST metrics extracted. Completed 0/1."
+      },
+      {
+        "sender": "Assistant",
+        "message": "Server feedback response: completed (accepted=False)."
       }
     ],
     "last_result": {
@@ -67,255 +71,8 @@
     "trace_id": "de6dbee8-6702-4b88-a965-0ec9a578bf59",
     "design_id": "design_e9de6d49-239b-4b90-85e7-cfe55ea60d0e",
     "iteration_index": 2,
-    "current_stage": "active",
-    "command_package": {
-      "command_catalog_version": "v1",
-      "commands": [
-        {
-          "checksum_scope": "all",
-          "command": "create_project",
-          "on_failure": "abort",
-          "params": {
-            "project_name": "design_e9de6d49-239b-4b90-85e7-cfe55ea60d0e"
-          },
-          "seq": 1
-        },
-        {
-          "checksum_scope": "all",
-          "command": "set_units",
-          "on_failure": "abort",
-          "params": {
-            "frequency": "ghz",
-            "geometry": "mm"
-          },
-          "seq": 2
-        },
-        {
-          "checksum_scope": "all",
-          "command": "set_frequency_range",
-          "on_failure": "abort",
-          "params": {
-            "start_ghz": 0.5,
-            "stop_ghz": 1.5
-          },
-          "seq": 3
-        },
-        {
-          "checksum_scope": "geometry",
-          "command": "define_material",
-          "on_failure": "abort",
-          "params": {
-            "conductivity_s_per_m": 58000000.0,
-            "kind": "conductor",
-            "name": "Copper (annealed)"
-          },
-          "seq": 4
-        },
-        {
-          "checksum_scope": "geometry",
-          "command": "define_material",
-          "on_failure": "abort",
-          "params": {
-            "epsilon_r": 4.4,
-            "kind": "substrate",
-            "loss_tangent": 0.02,
-            "name": "Rogers RT/duroid 5880"
-          },
-          "seq": 5
-        },
-        {
-          "checksum_scope": "geometry",
-          "command": "create_substrate",
-          "on_failure": "abort",
-          "params": {
-            "height_mm": 4.269618988037109,
-            "length_mm": 99.50494384765625,
-            "material": "Rogers RT/duroid 5880",
-            "name": "substrate",
-            "origin_mm": {
-              "x": 0.0,
-              "y": 0.0,
-              "z": 0.0
-            },
-            "width_mm": 109.23896789550781
-          },
-          "seq": 6
-        },
-        {
-          "checksum_scope": "geometry",
-          "command": "create_ground_plane",
-          "on_failure": "abort",
-          "params": {
-            "length_mm": 99.50494384765625,
-            "material": "Copper (annealed)",
-            "name": "ground",
-            "thickness_mm": 0.0363771878182888,
-            "width_mm": 109.23896789550781,
-            "z_mm": 0.0
-          },
-          "seq": 7
-        },
-        {
-          "checksum_scope": "geometry",
-          "command": "create_patch",
-          "on_failure": "abort",
-          "params": {
-            "center_mm": {
-              "x": 0.0,
-              "y": 0.0,
-              "z": 4.269618988037109
-            },
-            "length_mm": 75.92793869018554,
-            "material": "Copper (annealed)",
-            "name": "patch",
-            "thickness_mm": 0.0363771878182888,
-            "width_mm": 85.35150909423828
-          },
-          "seq": 8
-        },
-        {
-          "checksum_scope": "geometry",
-          "command": "create_feedline",
-          "on_failure": "abort",
-          "params": {
-            "end_mm": {
-              "x": 0.0014371974393725395,
-              "y": -55.12734031677246,
-              "z": 4.269618988037109
-            },
-            "length_mm": 36.48990249633789,
-            "material": "Copper (annealed)",
-            "name": "feed",
-            "start_mm": {
-              "x": 0.0014371974393725395,
-              "y": -18.63743782043457,
-              "z": 4.269618988037109
-            },
-            "thickness_mm": 0.0363771878182888,
-            "width_mm": 0.4805845022201538
-          },
-          "seq": 9
-        },
-        {
-          "checksum_scope": "simulation",
-          "command": "create_port",
-          "on_failure": "abort",
-          "params": {
-            "impedance_ohm": 50.0,
-            "port_id": 1,
-            "port_type": "discrete",
-            "reference_mm": {
-              "x": 0.0,
-              "y": 0.0,
-              "z": 0.0
-            }
-          },
-          "seq": 10
-        },
-        {
-          "checksum_scope": "simulation",
-          "command": "set_boundary",
-          "on_failure": "abort",
-          "params": {
-            "boundary_type": "open_add_space",
-            "padding_mm": 15.0
-          },
-          "seq": 11
-        },
-        {
-          "checksum_scope": "simulation",
-          "command": "set_solver",
-          "on_failure": "abort",
-          "params": {
-            "mesh_cells_per_wavelength": 20,
-            "solver_type": "time_domain"
-          },
-          "seq": 12
-        },
-        {
-          "checksum_scope": "simulation",
-          "command": "run_simulation",
-          "on_failure": "abort",
-          "params": {
-            "timeout_sec": 600
-          },
-          "seq": 13
-        },
-        {
-          "checksum_scope": "exports",
-          "command": "export_s_parameters",
-          "on_failure": "continue",
-          "params": {
-            "destination_hint": "s11",
-            "format": "json"
-          },
-          "seq": 14
-        },
-        {
-          "checksum_scope": "exports",
-          "command": "extract_summary_metrics",
-          "on_failure": "continue",
-          "params": {
-            "metrics": [
-              "center_frequency_ghz",
-              "bandwidth_mhz",
-              "return_loss_db",
-              "vswr",
-              "gain_dbi"
-            ]
-          },
-          "seq": 15
-        },
-        {
-          "checksum_scope": "exports",
-          "command": "export_farfield",
-          "on_failure": "continue",
-          "params": {
-            "destination_hint": "farfield",
-            "format": "json",
-            "frequency_ghz": 1.0
-          },
-          "seq": 16
-        }
-      ],
-      "design_id": "design_e9de6d49-239b-4b90-85e7-cfe55ea60d0e",
-      "expected_exports": [
-        "s_parameters",
-        "summary_metrics",
-        "farfield"
-      ],
-      "iteration_index": 1,
-      "predicted_dimensions": {
-        "feed_length_mm": 36.48990249633789,
-        "feed_offset_x_mm": 0.0014371974393725395,
-        "feed_offset_y_mm": -18.63743782043457,
-        "feed_width_mm": 0.4805845022201538,
-        "patch_height_mm": 0.0363771878182888,
-        "patch_length_mm": 75.92793869018554,
-        "patch_width_mm": 85.35150909423828,
-        "substrate_height_mm": 4.269618988037109,
-        "substrate_length_mm": 99.50494384765625,
-        "substrate_width_mm": 109.23896789550781
-      },
-      "predicted_metrics": {
-        "bandwidth_mhz": 15.0,
-        "center_frequency_ghz": 1.0
-      },
-      "safety_checks": [
-        "dimensions_within_constraints",
-        "command_order_validated",
-        "materials_whitelisted",
-        "client_capability_compatible",
-        "simulation_timeout_bounded"
-      ],
-      "schema_version": "cst_command_package.v1",
-      "session_id": "e9de6d49-239b-4b90-85e7-cfe55ea60d0e",
-      "trace_id": "de6dbee8-6702-4b88-a965-0ec9a578bf59",
-      "units": {
-        "frequency": "ghz",
-        "geometry": "mm"
-      }
-    },
+    "current_stage": "user_marked_done",
+    "command_package": null,
     "session_name": ""
   }
 }

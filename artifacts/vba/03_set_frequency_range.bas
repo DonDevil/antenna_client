@@ -1,1 +1,1 @@
-Solver.FrequencyRange "2.5", "3.5"
+Solver.FrequencyRange "1.9500000000000002", "2.95"

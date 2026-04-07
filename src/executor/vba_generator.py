@@ -243,15 +243,56 @@ Solver.Start
 
     def _add_farfield_monitor(self, parameters: Dict[str, Any]) -> str:
         frequency_ghz = float(parameters.get("frequency_ghz", 2.4))
-        raw_name = str(parameters.get("name", f"farfield_{frequency_ghz:g}ghz"))
-        name = self._sanitize_cst_name(raw_name)
+        raw_name = str(
+            parameters.get(
+                "monitor_name",
+                parameters.get("name", f"farfield (f={frequency_ghz:g})"),
+            )
+        )
+        name = raw_name.replace('"', '""')
+
+        # Default subvolume matches known-good CST macro generated manually.
+        subvolume = parameters.get(
+            "subvolume",
+            {
+                "xmin": -31.080615997314,
+                "xmax": 31.080615997314,
+                "ymin": -33.781352996826,
+                "ymax": 33.781352996826,
+                "zmin": 0.0,
+                "zmax": 5.5418050549924,
+            },
+        )
+        offset = parameters.get(
+            "subvolume_offset",
+            {"xmin": 10, "xmax": 10, "ymin": 10, "ymax": 10, "zmin": 10, "zmax": 10},
+        )
+
+        domain = str(parameters.get("domain", "Frequency"))
+        field_type = str(parameters.get("field_type", "Farfield"))
+        monitor_value = str(parameters.get("monitor_value", f"{frequency_ghz:g}"))
+        export_farfield_source = str(parameters.get("export_farfield_source", False)).lower() == "true"
+        use_subvolume = str(parameters.get("use_subvolume", False)).lower() == "true"
+        coordinates = str(parameters.get("coordinates", "Structure"))
+        inflate_with_offset = str(parameters.get("subvolume_inflate_with_offset", False)).lower() == "true"
+        offset_type = str(parameters.get("subvolume_offset_type", "FractionOfWavelength"))
+        nearfield = str(parameters.get("enable_nearfield_calculation", True)).lower() == "true"
+
         return f"""
 With Monitor
     .Reset
     .Name "{name}"
-    .Domain "Frequency"
-    .FieldType "Farfield"
-    .Frequency "{frequency_ghz}"
+    .Domain "{domain}"
+    .FieldType "{field_type}"
+    .MonitorValue "{monitor_value}"
+    .ExportFarfieldSource "{str(export_farfield_source)}"
+    .UseSubvolume "{str(use_subvolume)}"
+    .Coordinates "{coordinates}"
+    .SetSubvolume "{subvolume['xmin']}", "{subvolume['xmax']}", "{subvolume['ymin']}", "{subvolume['ymax']}", "{subvolume['zmin']}", "{subvolume['zmax']}"
+    .SetSubvolumeOffset "{offset['xmin']}", "{offset['xmax']}", "{offset['ymin']}", "{offset['ymax']}", "{offset['zmin']}", "{offset['zmax']}"
+    .SetSubvolumeInflateWithOffset "{str(inflate_with_offset)}"
+    .SetSubvolumeOffsetType "{offset_type}"
+    .EnableNearfieldCalculation "{str(nearfield)}"
     .Create
 End With
 """.strip()
