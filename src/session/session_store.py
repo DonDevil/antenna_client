@@ -43,9 +43,9 @@ class Session:
         self.updated_at = datetime.now().isoformat()
         self.status = "active"  # active, completed, failed, paused
         self.current_iteration = 0
-        self.command_package = None
-        self.results = []
-        self.metadata = {}
+        self.command_package: Optional[Dict[str, Any]] = None
+        self.results: List[Dict[str, Any]] = []
+        self.metadata: Dict[str, Any] = {}
     
     def to_dict(self) -> Dict[str, Any]:
         """Serialize session to dict"""
@@ -91,6 +91,18 @@ class SessionStore:
         Returns:
             Created Session object
         """
+        if session_id and session_id in self.sessions:
+            session = self.sessions[session_id]
+            session.user_request = user_request
+            if trace_id:
+                session.trace_id = trace_id
+            if design_id:
+                session.design_id = design_id
+            session.updated_at = datetime.now().isoformat()
+            self._persist_session(session)
+            logger.info(f"Updated session: {session_id}")
+            return session
+
         if not session_id:
             session_id = str(uuid.uuid4())
         
@@ -171,6 +183,26 @@ class SessionStore:
             session.updated_at = datetime.now().isoformat()
             self._persist_session(session)
             logger.debug(f"Stored result for session {session_id}")
+
+    def update_session_metadata_map(self, session_id: str, metadata: Dict[str, Any]) -> bool:
+        """Merge metadata into a session and persist it.
+
+        Args:
+            session_id: Session identifier
+            metadata: Metadata fields to merge into the session
+
+        Returns:
+            True if the session exists and was updated
+        """
+        session = self.sessions.get(session_id)
+        if not session:
+            return False
+
+        session.metadata.update(metadata)
+        session.updated_at = datetime.now().isoformat()
+        self._persist_session(session)
+        logger.debug(f"Updated metadata for session {session_id}")
+        return True
     
     def list_sessions(self) -> List[Dict[str, Any]]:
         """List all sessions

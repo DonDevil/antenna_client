@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import threading
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -69,6 +71,8 @@ class ChatRequestWorker(_BaseWorker):
             self.error_occurred.emit(str(e))
 
     async def _chat_async(self, base_url: str) -> dict[str, Any]:
+        endpoint_name = "/api/v1/intent/parse" if self.chat_mode == "speed" else "/api/v1/chat"
+        started_at = time.perf_counter()
         async with ServerConnector(base_url, timeout_sec=30) as connector:
             api = ApiClient(connector)
             response: dict[str, Any]
@@ -82,6 +86,7 @@ class ChatRequestWorker(_BaseWorker):
                     response = {"intent_summary": await api.parse_intent(self.user_message)}
                 except Exception:
                     response = {}
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000.0, 2)
 
         # Keep chat responsive: avoid extra intent endpoint round-trip on each message.
         intent_summary = response.get("intent_summary") if isinstance(response, dict) else {}
@@ -127,6 +132,9 @@ class ChatRequestWorker(_BaseWorker):
             "assistant_message": assistant_message,
             "requirements": requirements,
             "intent_summary": intent_summary,
+            "endpoint_name": endpoint_name,
+            "elapsed_ms": elapsed_ms,
+            "chat_mode": self.chat_mode,
         }
 
 
@@ -216,7 +224,7 @@ class CommandExecutionWorker(_BaseWorker):
 class ChatMessageHandler:
     """Manage the full desktop workflow: chat, optimize, execution, feedback, reset, export."""
 
-    def __init__(self, chat_widget, design_panel, status_bar=None, server_base_url: str = None):
+    def __init__(self, chat_widget, design_panel, status_bar=None, server_base_url: str | None = None):
         """Initialize chat message handler
 
         Args:
@@ -249,6 +257,7 @@ class ChatMessageHandler:
         self.trace_id: str | None = None
         self.design_id: str | None = None
         self.iteration_index: int = 0
+        self.capabilities_payload: dict[str, Any] = {}
 
         self.chat_widget.message_submitted.connect(self.handle_user_message)
         self.design_panel.start_pipeline_requested.connect(self.handle_start_pipeline)
@@ -264,13 +273,40 @@ class ChatMessageHandler:
             self.chat_widget.add_message("Please provide a longer message so I can extract antenna requirements.", "assistant")
             return
 
+        category = self.classify_user_message(message)
+
+        if category == "vague_input":
+            self.chat_widget.add_message(
+                "Please include target frequency (GHz), bandwidth (MHz), and antenna family (amc_patch, microstrip_patch, or wban_patch).",
+                "assistant",
+            )
+            self.chat_widget.add_message("Status: local routing classified message as vague input.", "system")
+            self._show_status("Local routing: vague input, no endpoint call.", timeout_ms=8000)
+            return
+
+        if category == "capability_question":
+            local_caps = self._build_capability_response()
+            if local_caps:
+                self.chat_widget.add_message(local_caps, "assistant")
+                self.chat_widget.add_message("Status: local capability response (0 ms).", "system")
+                self._show_status("Local routing: answered capabilities without endpoint call.", timeout_ms=8000)
+                return
+
         chat_mode = self.design_panel.get_chat_mode()
+        if category == "general_chat" and chat_mode == "speed":
+            # Intent parse is tuned for extraction; general chat should use rich assistant output.
+            chat_mode = "quality"
+
         mode_label = "speed" if chat_mode == "speed" else "quality"
         self._show_status(f"Extracting requirements from chat ({mode_label} mode)...")
         self.current_worker = ChatRequestWorker(message, self.requirements.copy(), chat_mode=chat_mode)
         self.current_worker.response_ready.connect(self.on_chat_response_received)
         self.current_worker.error_occurred.connect(self.on_error_occurred)
         self.current_worker.start()
+
+    def set_capabilities(self, capabilities_payload: dict[str, Any] | None) -> None:
+        """Store server capabilities for local capability-question responses."""
+        self.capabilities_payload = capabilities_payload or {}
 
     def on_chat_response_received(self, payload: dict[str, Any]):
         """Update the form from chat parsing and show the assistant reply."""
@@ -283,7 +319,21 @@ class ChatMessageHandler:
         response_text = payload.get("assistant_message", "Requirements updated.")
         logger.info(f"Chat response received: {response_text}")
         self.chat_widget.add_message(response_text, "assistant")
-        self._show_status("Requirements updated from chat.")
+
+        endpoint_name = payload.get("endpoint_name", "unknown")
+        elapsed_ms = payload.get("elapsed_ms")
+        chat_mode = payload.get("chat_mode", "unknown")
+        if isinstance(elapsed_ms, (int, float)):
+            self._show_status(
+                f"Requirements updated from chat. Mode={chat_mode}, endpoint={endpoint_name}, time={elapsed_ms:.0f} ms",
+                timeout_ms=8000,
+            )
+            self.chat_widget.add_message(
+                f"Status: {chat_mode} mode via {endpoint_name} in {elapsed_ms:.0f} ms.",
+                "system",
+            )
+        else:
+            self._show_status("Requirements updated from chat.")
 
     def handle_start_pipeline(self):
         """Build optimize request from the form and start the server pipeline."""
@@ -452,8 +502,14 @@ class ChatMessageHandler:
         actual_gain_dbi = float(parsed_gain if parsed_gain is not None else feedback_values["actual_gain_dbi"])
 
         actual_vswr = feedback_values["actual_vswr"]
-        if s11.get("vswr") is not None and 1.0 <= float(s11["vswr"]) <= 25.0:
-            actual_vswr = s11["vswr"]
+        s11_vswr = s11.get("vswr")
+        if s11_vswr is not None:
+            s11_vswr_value = float(s11_vswr)
+            if 1.0 <= s11_vswr_value <= 25.0:
+                actual_vswr = s11_vswr_value
+
+        if actual_vswr is None:
+            actual_vswr = 1.5
 
         payload = {
             "schema_version": "client_feedback.v1",
@@ -722,9 +778,79 @@ class ChatMessageHandler:
             return "The server took too long to respond. Try again or simplify the request before starting the pipeline."
         return f"Operation failed: {error}"
 
-    def _show_status(self, message: str):
+    def _show_status(self, message: str, timeout_ms: int = 5000):
         if self.status_bar is not None:
-            self.status_bar.show_message(message, 5000)
+            self.status_bar.show_message(message, timeout_ms)
+
+    @staticmethod
+    def classify_user_message(message: str) -> str:
+        """Classify user text for lightweight client-side routing.
+
+        Returns one of: design_request, capability_question, vague_input, general_chat.
+        """
+        text = str(message or "").strip().lower()
+        words = [w for w in re.split(r"\s+", text) if w]
+
+        has_number = bool(re.search(r"\d", text))
+        has_ghz_number = bool(re.search(r"\d+(?:\.\d+)?\s*ghz", text))
+        has_mhz_number = bool(re.search(r"\d+(?:\.\d+)?\s*mhz", text))
+
+        antenna_keywords = {
+            "antenna",
+            "patch",
+            "microstrip",
+            "amc",
+            "wban",
+            "design",
+            "optimize",
+        }
+        capability_keywords = {
+            "available",
+            "capabilities",
+            "supported",
+            "materials",
+            "substrate",
+            "families",
+            "range",
+        }
+
+        has_antenna_keyword = any(re.search(rf"\b{re.escape(k)}\b", text) for k in antenna_keywords)
+        has_capability_keyword = any(re.search(rf"\b{re.escape(k)}\b", text) for k in capability_keywords)
+
+        if has_ghz_number or has_mhz_number or has_antenna_keyword:
+            return "design_request"
+        if has_capability_keyword:
+            return "capability_question"
+        if len(words) < 3 and not has_number and not has_antenna_keyword:
+            return "vague_input"
+        return "general_chat"
+
+    def _build_capability_response(self) -> str | None:
+        payload = self.capabilities_payload.get("capabilities", self.capabilities_payload)
+        if not isinstance(payload, dict) or not payload:
+            return None
+
+        families = payload.get("supported_families") or payload.get("supported_antenna_families") or []
+        freq = payload.get("frequency_range_ghz") or {}
+        bw = payload.get("bandwidth_range_mhz") or {}
+        substrates = payload.get("available_substrate_materials") or []
+        conductors = payload.get("available_conductor_materials") or []
+
+        lines = ["Available capabilities:"]
+        if families:
+            lines.append("- Families: " + ", ".join(str(item) for item in families))
+        if freq:
+            lines.append(f"- Frequency range (GHz): {freq.get('min', '?')} to {freq.get('max', '?')}")
+        if bw:
+            lines.append(f"- Bandwidth range (MHz): {bw.get('min', '?')} to {bw.get('max', '?')}")
+        if substrates:
+            lines.append("- Substrates: " + ", ".join(str(item) for item in substrates))
+        if conductors:
+            lines.append("- Conductors: " + ", ".join(str(item) for item in conductors))
+
+        if len(lines) == 1:
+            return None
+        return "\n".join(lines)
 
     @staticmethod
     def _to_workspace_relative_path(path: Path | None) -> str | None:

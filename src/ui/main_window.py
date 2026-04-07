@@ -152,6 +152,7 @@ class MainWindow(QMainWindow):
         supported_families = payload.get("supported_families") or payload.get("supported_antenna_families") or []
         if supported_families:
             self.design_panel.set_supported_families(supported_families)
+        self.message_handler.set_capabilities(capabilities_payload)
 
         # Restore latest persisted session when available; otherwise start fresh.
         if not self.message_handler.restore_latest_session():

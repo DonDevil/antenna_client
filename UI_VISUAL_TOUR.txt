@@ -1,0 +1,324 @@
+# Modern UI Visual Tour
+
+## 🎨 Color Theme Showcase
+
+### Primary Colors
+- **🔵 Primary Blue** `#3b82f6` - Buttons, user messages, primary actions
+- **🔷 Primary Dark** `#1e3a8a` - Subtle accents
+- **🔵 Secondary Cyan** `#06b6d4` - Hover states, alternatives
+- **🟢 Success Green** `#22c55e` - Connected status, positive
+- **🟠 Warning Orange** `#f59e0b` - Server alerts, warnings
+- **🟤 Accent Green** `#10b981` - Special buttons, exports
+
+### Background Palette
+- **🌑 Background Navy** `#0f172a` - Main canvas
+- **🌙 Surface** `#1e293b` - Panels, headers
+- **🌑 Surface Light** `#334155` - Cards, inputs
+- **🔲 Border** `#475569` - Dividers, subtle lines
+
+### Text Hierarchy
+- **📝 Primary** `#f1f5f9` - Headers, important text
+- **📄 Secondary** `#cbd5e1` - Standard text
+- **📋 Tertiary** `#94a3b8` - Hints, smaller labels
+
+---
+
+## 🎬 Component Showcase
+
+### Top Navigation Bar
+```
+┌─────────────────────────────────────────────────────┐
+│ 🎯 Antenna Design Studio    [● CST] [● API] [○ Srv]│
+└─────────────────────────────────────────────────────┘
+```
+- Professional branding
+- Real-time status (color-coded)
+- Pulses when dynamic data updates
+
+### Chat Mode Selector
+```
+┌─ Chat Mode ────────────────────┐
+│ ⚡ Speed Mode              [▼] │  ← Currently selected
+│                                 │
+│ 💎 Quality Mode                │  ← Alternative
+└─────────────────────────────────┘
+```
+- Clearly labeled
+- Emoji indicators for quick identification
+- Dropdown on dark background
+
+### Design Parameter Card
+```
+┌─ Antenna Family ──────────────┐
+│ 📡 Patch               [▼]    │  ← Easy to spot icon
+│                               │
+│ Other options:               │
+│ • 📌 Dipole                  │
+│ • 🎯 Monopole               │
+│ • 📢 Horn                    │
+│ • 🌀 Helical                │
+└───────────────────────────────┘
+```
+
+### Material Selection Card
+```
+┌─────────────────────────────────┐
+│ Substrate: FR4  │ Conductor: Cu │
+│    [editable]   │   [editable]   │
+└─────────────────────────────────┘
+```
+- Split layout for compact space
+- Clear labels
+- Editable fields
+
+### Dimension Input Grid (2x2)
+```
+┌─────────────┬──────────────┐
+│◀▶ Patch W   │▲▼ Patch L    │
+│  [0.0]      │    [0.0]     │
+├─────────────┼──────────────┤
+│◀▶ Substr W  │▲▼ Substr L   │
+│  [0.0]      │    [0.0]     │
+└─────────────┴──────────────┘
+```
+- Organized 2x2 layout
+- Clear labels with icons
+- Consistent spacing
+
+### Chat Interface
+```
+User Message (RIGHT-ALIGNED):
+┌─────────────────────────────────────┐
+│ You     2:45 PM                     │
+│ Design antenna for 2.4 GHz WiFi ▼  │
+└─────────────────────────────────────┘
+
+Assistant Response (LEFT-ALIGNED):
+┌─────────────────────────────────────┐
+│ Assistant      2:46 PM              │
+│ I'll optimize your antenna for      │
+│ 2.4 GHz operation with maximum      │
+│ efficiency. Let me adjust...        │
+│ ⚡ Used intent-parse (1.2s)        │
+└─────────────────────────────────────┘
+```
+- Bubble style conversation
+- Distinct colors (user blue, assistant gray)
+- Metadata shows endpoint and timing
+- Responsive sizing
+
+### Action Buttons
+```
+PRIMARY ACTION:
+┌──────────────────────────┐
+│ ▶ Start Optimization    │  ← Blue, primary color
+└──────────────────────────┘
+  Hover: Brightens to cyan
+
+SECONDARY ACTION:
+┌──────────────────────────┐
+│ ✕ Clear All              │  ← Gray, subtle
+└──────────────────────────┘
+  Hover: Darkens to border color
+```
+
+### Results Metrics Cards
+```
+┌────────────────────────────────┐
+│ 📡  Frequency                  │
+│     2.45 GHz                   │  ← Color-coded value
+└────────────────────────────────┘
+
+┌────────────────────────────────┐
+│ 📈  Bandwidth                  │
+│     450 MHz                    │
+└────────────────────────────────┘
+
+┌────────────────────────────────┐
+│ 📶  Gain                       │
+│     6.2 dB                     │
+└────────────────────────────────┘
+
+┌────────────────────────────────┐
+│ ✓  VSWR                        │
+│    1.15                        │
+└────────────────────────────────┘
+```
+- Icon for quick visual ID
+- Label in secondary text
+- Value in primary text
+- All at a glance
+
+### Farfield Preview
+```
+┌──────────────────────────┐
+│                          │
+│   3D Farfield Pattern    │  ← Placeholder for chart
+│        [Graph Area]      │
+│                          │
+└──────────────────────────┘
+```
+
+### Export Button
+```
+┌──────────────────────────┐
+│ 📥 Export Results        │  ← Green accent color
+└──────────────────────────┘
+  Hover: Lightens to brighter green
+```
+
+---
+
+## 🎬 Interaction States
+
+### Button States
+```
+NORMAL:
+┌──────────────────┐
+│ ▶ Start Design   │ bg: #3b82f6 (blue)
+└──────────────────┘
+
+HOVER:
+┌──────────────────┐
+│ ▶ Start Design   │ bg: #06b6d4 (cyan) - smooth transition
+└──────────────────┘
+
+ACTIVE/PRESSED:
+┌──────────────────┐
+│ ▶ Start Design   │ bg: darker variant
+└──────────────────┘
+```
+- 200ms animation duration
+- Smooth color transitions
+- Clear visual feedback
+
+### Status Indicator Animation
+```
+Connected (Pulsing):
+● ─ ─ ─ ─   (full opacity, "Connected" text visible)
+  ↓ (fade over 0.75s)
+◐ ─ ─ ─ ─   (50% opacity)
+  ↓ (fade over 0.75s)
+● ─ ─ ─ ─   (back to full)
+```
+- Pulses every 1.5 seconds
+- Attracts attention without being jarring
+
+---
+
+## 📐 Layout Dimensions
+
+### Window Size
+- Width: 1600px
+- Height: 1000px
+- Scalable and responsive
+
+### Panel Widths
+- Left Panel: 420px (Design inputs)
+- Middle Panel: Flex (grows/shrinks)
+- Right Panel: 380px (Results)
+
+### Element Heights
+- Top Bar: 60px
+- Chat Header: 64px
+- Chat Input: 80px
+- Buttons: 48px (primary), 40px (secondary)
+- Cards: 56-60px typically
+- Input Fields: 44-48px
+
+### Spacing
+- Panel margins: 16-20px
+- Between elements: 8-18px depending on grouping
+- Border width: 1px (subtle)
+- Border radius: 6-12px (smooth)
+
+---
+
+## 🎨 Typography
+
+### Font Weights
+- **Bold** - Headers, emphasis (600 weight)
+- **Normal** - Body text (400 weight)
+
+### Font Sizes
+- **20px** - Main title (Studio name)
+- **18px** - Section headers (Design Parameters)
+- **16px** - Panel titles (Design Assistant)
+- **13px** - Input/body text
+- **12px** - Standard labels
+- **11px** - Secondary text
+- **10px** - Tertiary/helper text
+- **9px** - Metadata (timing, hints)
+
+---
+
+## ✨ Visual Effects
+
+### Shadows & Depth
+- Subtle borders (1px, `#475569`)
+- No hard shadows
+- Layered appearance through color gradients
+- Rounded corners add depth
+
+### Transparency
+- Most elements at 100% opacity
+- ComboBox background at 60% for subtle effect
+- Pulsing indicators use opacity transitions
+
+### Animations
+- **Button hover** - 200ms color transition
+- **Status pulse** - 1.5s loop (fade in/out)
+- **Smooth scrolling** - ListView with clip
+- **No janky movements** - Professional feel
+
+---
+
+## 🎯 Visual Hierarchy
+
+### Level 1 - Most Important
+- Top bar with branding
+- Primary blue buttons
+- Large chat messages
+- Message from user
+
+### Level 2 - Important
+- Section headers
+- Input fields
+- Status indicators
+- Metric values
+
+### Level 3 - Supporting
+- Field labels
+- Helper text
+- Metadata (timing)
+- Secondary buttons
+
+### Level 4 - Background
+- Borders
+- Surface color
+- Layout dividers
+
+---
+
+## 🌓 Dark Theme Benefits
+
+1. **Eye Comfort** - Reduces strain in long sessions
+2. **Professional** - Matches modern software standards
+3. **Focus** - Draws attention to content
+4. **Modern** - Contemporary aesthetic
+5. **Accessibility** - Better for some users
+6. **Brand** - Distinguishes from old UI
+
+---
+
+## 📱 Responsive Design
+
+### Adapts to:
+- Window resize (layouts reflow)
+- Dynamic content (chat grows down)
+- Text wrapping (labels stack if needed)
+- Different DPI (Qt scales automatically)
+
+---
+
+Your new UI is **modern**, **professional**, and **polished**! 🚀

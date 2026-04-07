@@ -3,7 +3,7 @@
     "base_url": "http://192.168.29.147:8000",
     "timeout_sec": 60,
     "retry_count": 3,
-    "retry_backoff": 2.0
+    "retry_backoff": 2
   },
   "cst": {
     "executable_path": "C:\\Program Files (x86)\\CST Studio Suite 2024\\CST DESIGN ENVIRONMENT.exe",
@@ -30,6 +30,9 @@
     "supports_farfield_export": true,
     "supports_current_distribution_export": true,
     "max_simulation_timeout_sec": 600,
-    "export_formats": ["json", "csv"]
+    "export_formats": [
+      "json",
+      "csv"
+    ]
   }
 }
