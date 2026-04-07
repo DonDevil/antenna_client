@@ -1,11 +1,12 @@
-"""Parse and validate current cst_command_package.v1 payloads from the server."""
+"""Parse and validate cst_command_package payloads from the server."""
 
 from __future__ import annotations
 
 from typing import Dict, List, Any, Optional
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError, ConfigDict, model_validator
 
+from executor.v2_command_contract import V2CommandContractValidator
 from utils.logger import get_logger
 
 
@@ -15,15 +16,32 @@ logger = get_logger(__name__)
 class Command(BaseModel):
     """Individual command in the server command package."""
 
+    model_config = ConfigDict(extra="allow")
+
     seq: int
     command: str
     params: Dict[str, Any]
     on_failure: str = "abort"
-    checksum_scope: str
+    checksum_scope: str = "command"
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_aliases(cls, data: Any) -> Any:
+        """Accept both v1 and legacy alias field names."""
+        if not isinstance(data, dict):
+            return data
+        normalized = dict(data)
+        if "command" not in normalized and "type" in normalized:
+            normalized["command"] = normalized["type"]
+        if "params" not in normalized and "parameters" in normalized:
+            normalized["params"] = normalized["parameters"]
+        return normalized
 
 
 class CommandPackage(BaseModel):
     """Current server command package schema."""
+
+    model_config = ConfigDict(extra="allow")
 
     schema_version: str
     command_catalog_version: str
@@ -41,8 +59,14 @@ class CommandPackage(BaseModel):
 
 class CommandParser:
     """Parse and validate command packages"""
-    
-    SUPPORTED_SCHEMA_VERSION = "cst_command_package.v1"
+
+    SUPPORTED_SCHEMA_VERSIONS = (
+        "cst_command_package.v1",
+        "cst_command_package.v2",
+    )
+
+    def __init__(self) -> None:
+        self._v2_contract_validator = V2CommandContractValidator()
     
     def parse_package(self, package_data: Dict[str, Any]) -> CommandPackage:
         """Parse command package
@@ -80,10 +104,10 @@ class CommandParser:
             ValueError: If package is invalid
         """
         # Check version compatibility
-        if package.schema_version != self.SUPPORTED_SCHEMA_VERSION:
+        if package.schema_version not in self.SUPPORTED_SCHEMA_VERSIONS:
             raise ValueError(
                 f"Unsupported package version: {package.schema_version} "
-                f"(supported: {self.SUPPORTED_SCHEMA_VERSION})"
+                f"(supported: {', '.join(self.SUPPORTED_SCHEMA_VERSIONS)})"
             )
         
         # Check commands are not empty
@@ -100,6 +124,9 @@ class CommandParser:
                 raise ValueError(f"Command {cmd.seq} missing command name")
             if not isinstance(cmd.params, dict):
                 raise ValueError(f"Command {cmd.seq} has invalid params payload")
+
+        if package.schema_version == "cst_command_package.v2":
+            self._v2_contract_validator.validate_commands(package.commands)
         
         logger.info(f"Package validation successful: {len(package.commands)} commands valid")
         return True

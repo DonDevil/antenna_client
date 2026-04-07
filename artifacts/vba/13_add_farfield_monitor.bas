@@ -1,9 +1,9 @@
 With Monitor
     .Reset
-    .Name "farfield_2p450ghz"
+    .Name "farfield_2p500ghz"
     .Domain "Frequency"
     .FieldType "Farfield"
-    .MonitorValue "2.45"
+    .MonitorValue "2.5"
     .ExportFarfieldSource "False"
     .UseSubvolume "False"
     .Coordinates "Structure"

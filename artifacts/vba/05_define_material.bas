@@ -1,6 +1,6 @@
 With Material
     .Reset
-    .Name "Rogers_RT_duroid_5880"
+    .Name "FR-4_(lossy)"
     .Folder ""
     .FrqType "all"
     .Type "Normal"

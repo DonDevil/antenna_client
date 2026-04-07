@@ -18,7 +18,7 @@ class VBAGenerator:
     def _sanitize_cst_name(value: Any) -> str:
         """Normalize names for CST object/material identifiers.
 
-        CST rejects names containing characters such as `/`, `\`, `:` and others.
+        CST rejects names containing characters such as `/`, `\\`, `:` and others.
         """
         raw = str(value).strip()
         if not raw:
@@ -27,6 +27,17 @@ class VBAGenerator:
         sanitized = re.sub(r"\s+", "_", sanitized)
         sanitized = re.sub(r"_+", "_", sanitized).strip("_")
         return sanitized or "unnamed"
+
+    @staticmethod
+    def _to_bool_string(value: Any) -> str:
+        if isinstance(value, bool):
+            return "True" if value else "False"
+        normalized = str(value).strip().lower()
+        return "True" if normalized in {"1", "true", "yes", "on"} else "False"
+
+    @staticmethod
+    def _component_object_name(component: Any, solid: Any) -> str:
+        return f"{VBAGenerator._sanitize_cst_name(component)}:{VBAGenerator._sanitize_cst_name(solid)}"
     
     def generate_macro(self, command_type: str, parameters: Dict[str, Any]) -> str:
         """Generate VBA macro for command
@@ -46,6 +57,24 @@ class VBAGenerator:
             "set_units": self._set_units,
             "set_frequency_range": self._set_frequency_range,
             "define_material": self._define_material,
+            "create_component": self._create_component,
+            "define_brick": self._define_brick,
+            "define_sphere": self._define_sphere,
+            "define_cone": self._define_cone,
+            "define_torus": self._define_torus,
+            "define_cylinder": self._define_cylinder,
+            "define_ecylinder": self._define_ecylinder,
+            "define_extrude": self._define_extrude,
+            "define_rotate": self._define_rotate,
+            "define_loft": self._define_loft,
+            "boolean_add": self._boolean_add,
+            "boolean_intersect": self._boolean_intersect,
+            "boolean_subtract": self._boolean_subtract,
+            "boolean_insert": self._boolean_insert,
+            "pick_face": self._pick_face,
+            "pick_edge": self._pick_edge,
+            "pick_endpoint": self._pick_endpoint,
+            "calculate_port_extension_coefficient": self._calculate_port_extension_coefficient,
             "create_substrate": self._create_substrate,
             "create_ground_plane": self._create_ground_plane,
             "create_patch": self._create_patch,
@@ -58,6 +87,22 @@ class VBAGenerator:
             "export_s_parameters": self._export_s_parameters,
             "extract_summary_metrics": self._extract_summary_metrics,
             "export_farfield": self._export_farfield,
+            # V2 aliases
+            "new_component": self._create_component,
+            "brick": self._define_brick,
+            "sphere": self._define_sphere,
+            "cone": self._define_cone,
+            "torus": self._define_torus,
+            "cylinder": self._define_cylinder,
+            "ecylinder": self._define_ecylinder,
+            "extrude": self._define_extrude,
+            "rotate": self._define_rotate,
+            "loft": self._define_loft,
+            "solid_add": self._boolean_add,
+            "solid_intersect": self._boolean_intersect,
+            "solid_subtract": self._boolean_subtract,
+            "solid_insert": self._boolean_insert,
+            "pick_end_point": self._pick_endpoint,
         }
         handler = dispatch.get(command_type)
         if handler is None:
@@ -85,6 +130,268 @@ End With
 
     def _create_project(self, parameters: Dict[str, Any]) -> str:
         raise ValueError("create_project must be handled by the caller, not emitted as VBA")
+
+    def _create_component(self, parameters: Dict[str, Any]) -> str:
+        component_name = self._sanitize_cst_name(parameters.get("component", parameters.get("name", "component1")))
+        return f'Component.New "{component_name}"'
+
+    def _define_brick(self, parameters: Dict[str, Any]) -> str:
+        return self._brick(
+            parameters["name"],
+            parameters.get("material", "PEC"),
+            float(parameters["xrange"][0]),
+            float(parameters["xrange"][1]),
+            float(parameters["yrange"][0]),
+            float(parameters["yrange"][1]),
+            float(parameters["zrange"][0]),
+            float(parameters["zrange"][1]),
+        )
+
+    def _define_sphere(self, parameters: Dict[str, Any]) -> str:
+        name = self._sanitize_cst_name(parameters["name"])
+        component = self._sanitize_cst_name(parameters.get("component", "component1"))
+        material = self._sanitize_cst_name(parameters.get("material", "PEC"))
+        center = parameters["center"]
+        segments = parameters.get("segments", 0)
+        return f"""
+With Sphere
+    .Reset
+    .Name "{name}"
+    .Component "{component}"
+    .Material "{material}"
+    .Axis "{parameters.get('axis', 'z')}"
+    .CenterRadius "{parameters.get('center_radius', 0)}"
+    .TopRadius "{parameters.get('top_radius', 0)}"
+    .BottomRadius "{parameters.get('bottom_radius', 0)}"
+    .Center "{center[0]}", "{center[1]}", "{center[2]}"
+    .Segments "{segments}"
+    .Create
+End With
+""".strip()
+
+    def _define_cone(self, parameters: Dict[str, Any]) -> str:
+        name = self._sanitize_cst_name(parameters["name"])
+        component = self._sanitize_cst_name(parameters.get("component", "component1"))
+        material = self._sanitize_cst_name(parameters.get("material", "PEC"))
+        zrange = parameters["zrange"]
+        return f"""
+With Cone
+    .Reset
+    .Name "{name}"
+    .Component "{component}"
+    .Material "{material}"
+    .BottomRadius "{parameters.get('bottom_radius', 1)}"
+    .TopRadius "{parameters.get('top_radius', 0)}"
+    .Axis "{parameters.get('axis', 'z')}"
+    .Zrange "{zrange[0]}", "{zrange[1]}"
+    .Xcenter "{parameters.get('xcenter', 0)}"
+    .Ycenter "{parameters.get('ycenter', 0)}"
+    .Segments "{parameters.get('segments', 0)}"
+    .Create
+End With
+""".strip()
+
+    def _define_torus(self, parameters: Dict[str, Any]) -> str:
+        name = self._sanitize_cst_name(parameters["name"])
+        component = self._sanitize_cst_name(parameters.get("component", "component1"))
+        material = self._sanitize_cst_name(parameters.get("material", "PEC"))
+        center = parameters.get("center", [0, 0, 0])
+        return f"""
+With Torus
+    .Reset
+    .Name "{name}"
+    .Component "{component}"
+    .Material "{material}"
+    .OuterRadius "{parameters.get('outer_radius', 1)}"
+    .InnerRadius "{parameters.get('inner_radius', 0.5)}"
+    .Axis "{parameters.get('axis', 'z')}"
+    .Xcenter "{center[0]}"
+    .Ycenter "{center[1]}"
+    .Zcenter "{center[2]}"
+    .Segments "{parameters.get('segments', 0)}"
+    .Create
+End With
+""".strip()
+
+    def _define_cylinder(self, parameters: Dict[str, Any]) -> str:
+        name = self._sanitize_cst_name(parameters["name"])
+        component = self._sanitize_cst_name(parameters.get("component", "component1"))
+        material = self._sanitize_cst_name(parameters.get("material", "PEC"))
+        zrange = parameters["zrange"]
+        center = parameters.get("center", [0, 0])
+        return f"""
+With Cylinder
+    .Reset
+    .Name "{name}"
+    .Component "{component}"
+    .Material "{material}"
+    .OuterRadius "{parameters.get('outer_radius', 1)}"
+    .InnerRadius "{parameters.get('inner_radius', 0)}"
+    .Axis "{parameters.get('axis', 'z')}"
+    .Zrange "{zrange[0]}", "{zrange[1]}"
+    .Xcenter "{center[0]}"
+    .Ycenter "{center[1]}"
+    .Segments "{parameters.get('segments', 0)}"
+    .Create
+End With
+""".strip()
+
+    def _define_ecylinder(self, parameters: Dict[str, Any]) -> str:
+        name = self._sanitize_cst_name(parameters["name"])
+        component = self._sanitize_cst_name(parameters.get("component", "component1"))
+        material = self._sanitize_cst_name(parameters.get("material", "PEC"))
+        zrange = parameters["zrange"]
+        center = parameters.get("center", [0, 0])
+        return f"""
+With ECylinder
+    .Reset
+    .Name "{name}"
+    .Component "{component}"
+    .Material "{material}"
+    .Xradius "{parameters.get('xradius', 1)}"
+    .Yradius "{parameters.get('yradius', 1)}"
+    .Axis "{parameters.get('axis', 'z')}"
+    .Zrange "{zrange[0]}", "{zrange[1]}"
+    .Xcenter "{center[0]}"
+    .Ycenter "{center[1]}"
+    .Segments "{parameters.get('segments', 0)}"
+    .Create
+End With
+""".strip()
+
+    def _pointlist_block(self, points: List[List[Any]], close: bool = False) -> str:
+        if not points:
+            raise ValueError("Point-list based operation requires at least one point")
+        rows = [f'    .Point "{points[0][0]}", "{points[0][1]}"']
+        for point in points[1:]:
+            rows.append(f'    .LineTo "{point[0]}", "{point[1]}"')
+        if close and (points[0][0] != points[-1][0] or points[0][1] != points[-1][1]):
+            rows.append(f'    .LineTo "{points[0][0]}", "{points[0][1]}"')
+        return "\n".join(rows)
+
+    def _define_extrude(self, parameters: Dict[str, Any]) -> str:
+        name = self._sanitize_cst_name(parameters["name"])
+        component = self._sanitize_cst_name(parameters.get("component", "component1"))
+        material = self._sanitize_cst_name(parameters.get("material", "PEC"))
+        origin = parameters.get("origin", [0.0, 0.0, 0.0])
+        uvector = parameters.get("uvector", [1.0, 0.0, 0.0])
+        vvector = parameters.get("vvector", [0.0, 1.0, 0.0])
+        points = parameters.get("points", [])
+        pointlist = self._pointlist_block(points, close=True)
+        return f"""
+With Extrude
+    .Reset
+    .Name "{name}"
+    .Component "{component}"
+    .Material "{material}"
+    .Mode "{parameters.get('mode', 'Pointlist')}"
+    .Height "{parameters.get('height', 1)}"
+    .Twist "{parameters.get('twist', 0.0)}"
+    .Taper "{parameters.get('taper', 0.0)}"
+    .Origin "{origin[0]}", "{origin[1]}", "{origin[2]}"
+    .Uvector "{uvector[0]}", "{uvector[1]}", "{uvector[2]}"
+    .Vvector "{vvector[0]}", "{vvector[1]}", "{vvector[2]}"
+{pointlist}
+    .Create
+End With
+""".strip()
+
+    def _define_rotate(self, parameters: Dict[str, Any]) -> str:
+        name = self._sanitize_cst_name(parameters["name"])
+        component = self._sanitize_cst_name(parameters.get("component", "component1"))
+        material = self._sanitize_cst_name(parameters.get("material", "PEC"))
+        origin = parameters.get("origin", [0.0, 0.0, 0.0])
+        rvector = parameters.get("rvector", [0.0, 1.0, 0.0])
+        zvector = parameters.get("zvector", [1.0, 0.0, 0.0])
+        points = parameters.get("points", [])
+        pointlist = self._pointlist_block(points, close=True)
+        return f"""
+With Rotate
+    .Reset
+    .Name "{name}"
+    .Component "{component}"
+    .Material "{material}"
+    .Mode "{parameters.get('mode', 'Pointlist')}"
+    .StartAngle "{parameters.get('start_angle', 0.0)}"
+    .Angle "{parameters.get('angle', 360)}"
+    .Height "{parameters.get('height', 0.0)}"
+    .RadiusRatio "{parameters.get('radius_ratio', 1.0)}"
+    .NSteps "{parameters.get('nsteps', 0)}"
+    .SplitClosedEdges "{self._to_bool_string(parameters.get('split_closed_edges', True))}"
+    .SegmentedProfile "{self._to_bool_string(parameters.get('segmented_profile', False))}"
+    .SimplifySolid "{self._to_bool_string(parameters.get('simplify_solid', False))}"
+    .UseAdvancedSegmentedRotation "{self._to_bool_string(parameters.get('use_advanced_segmented_rotation', True))}"
+    .CutEndOff "{self._to_bool_string(parameters.get('cut_end_off', False))}"
+    .Origin "{origin[0]}", "{origin[1]}", "{origin[2]}"
+    .Rvector "{rvector[0]}", "{rvector[1]}", "{rvector[2]}"
+    .Zvector "{zvector[0]}", "{zvector[1]}", "{zvector[2]}"
+{pointlist}
+    .Create
+End With
+""".strip()
+
+    def _define_loft(self, parameters: Dict[str, Any]) -> str:
+        name = self._sanitize_cst_name(parameters["name"])
+        component = self._sanitize_cst_name(parameters.get("component", "component1"))
+        material = self._sanitize_cst_name(parameters.get("material", "PEC"))
+        return f"""
+With Loft
+    .Reset
+    .Name "{name}"
+    .Component "{component}"
+    .Material "{material}"
+    .Tangency "{parameters.get('tangency', 0.0)}"
+    .Minimizetwist "{self._to_bool_string(parameters.get('minimizetwist', True)).lower()}"
+    .CreateNew
+End With
+""".strip()
+
+    def _boolean_add(self, parameters: Dict[str, Any]) -> str:
+        lhs = self._component_object_name(parameters["component"], parameters["target"])
+        rhs = self._component_object_name(parameters["component"], parameters["tool"])
+        return f'Solid.Add "{lhs}", "{rhs}"'
+
+    def _boolean_intersect(self, parameters: Dict[str, Any]) -> str:
+        lhs = self._component_object_name(parameters["component"], parameters["target"])
+        rhs = self._component_object_name(parameters["component"], parameters["tool"])
+        return f'Solid.Intersect "{lhs}", "{rhs}"'
+
+    def _boolean_subtract(self, parameters: Dict[str, Any]) -> str:
+        lhs = self._component_object_name(parameters["component"], parameters["target"])
+        rhs = self._component_object_name(parameters["component"], parameters["tool"])
+        return f'Solid.Subtract "{lhs}", "{rhs}"'
+
+    def _boolean_insert(self, parameters: Dict[str, Any]) -> str:
+        lhs = self._component_object_name(parameters["component"], parameters["target"])
+        rhs = self._component_object_name(parameters["component"], parameters["tool"])
+        return f'Solid.Insert "{lhs}", "{rhs}"'
+
+    def _pick_face(self, parameters: Dict[str, Any]) -> str:
+        obj = self._component_object_name(parameters["component"], parameters["solid"])
+        return f'Pick.PickFaceFromId "{obj}", "{parameters["face_id"]}"'
+
+    def _pick_edge(self, parameters: Dict[str, Any]) -> str:
+        obj = self._component_object_name(parameters["component"], parameters["solid"])
+        return (
+            f'Pick.PickEdgeFromId "{obj}", '
+            f'"{parameters["edge_id"]}", "{parameters.get("vertex_id", parameters["edge_id"])}"'
+        )
+
+    def _pick_endpoint(self, parameters: Dict[str, Any]) -> str:
+        obj = self._component_object_name(parameters["component"], parameters["solid"])
+        endpoint_id = parameters.get("endpoint_id", parameters.get("point_id"))
+        if endpoint_id is None:
+            raise ValueError("pick_endpoint requires endpoint_id or point_id")
+        return f'Pick.PickEndpointFromId "{obj}", "{endpoint_id}"'
+
+    def _calculate_port_extension_coefficient(self, parameters: Dict[str, Any]) -> str:
+        port_id = int(parameters.get("port_id", 1))
+        return f"""
+With Port
+    .PortNumber "{port_id}"
+    .CalculatePortExtensionCoefficient
+End With
+""".strip()
 
     def _set_units(self, parameters: Dict[str, Any]) -> str:
         return f"""

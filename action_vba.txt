@@ -1,0 +1,181 @@
+new component : component1
+Component.New "component1"
+
+define brick: component1:solid1
+With Brick
+     .Reset 
+     .Name "solid1" 
+     .Component "component1" 
+     .Material "PEC" 
+     .Xrange "-16", "-4" 
+     .Yrange "-3", "2" 
+     .Zrange "-3", "0" 
+     .Create
+End With
+
+define sphere: component1:solid1
+With Sphere 
+     .Reset 
+     .Name "solid1" 
+     .Component "component1" 
+     .Material "PEC" 
+     .Axis "z" 
+     .CenterRadius "11.5" 
+     .TopRadius "0" 
+     .BottomRadius "0" 
+     .Center "-19", "-4.5", "0" 
+     .Segments "0" 
+     .Create 
+End With
+
+define cone: component1:solid1
+With Cone 
+     .Reset 
+     .Name "solid1" 
+     .Component "component1" 
+     .Material "PEC" 
+     .BottomRadius "5.4" 
+     .TopRadius "9.2" 
+     .Axis "z" 
+     .Zrange "-59", "0" 
+     .Xcenter "-17.6" 
+     .Ycenter "-3.4" 
+     .Segments "0" 
+     .Create 
+End With
+
+define torus: component1:solid1
+With Torus 
+     .Reset 
+     .Name "solid1" 
+     .Component "component1" 
+     .Material "PEC" 
+     .OuterRadius "5" 
+     .InnerRadius "2" 
+     .Axis "z" 
+     .Xcenter "-15" 
+     .Ycenter "-2" 
+     .Zcenter "0" 
+     .Segments "0" 
+     .Create 
+End With
+
+define cylinder: component1:solid1
+With Cylinder 
+     .Reset 
+     .Name "solid1" 
+     .Component "component1" 
+     .Material "PEC" 
+     .OuterRadius "6" 
+     .InnerRadius "4" 
+     .Axis "z" 
+     .Zrange "-44", "0" 
+     .Xcenter "-16" 
+     .Ycenter "-6" 
+     .Segments "0" 
+     .Create 
+End With
+
+define ecylinder: component1:solid1
+With ECylinder 
+     .Reset 
+     .Name "solid1" 
+     .Component "component1" 
+     .Material "PEC" 
+     .Xradius "12" 
+     .Yradius "10" 
+     .Axis "z" 
+     .Zrange "-37", "0" 
+     .Xcenter "-7" 
+     .Ycenter "1" 
+     .Segments "0" 
+     .Create 
+End With
+
+define extrude: component1:solid1
+With Extrude 
+     .Reset 
+     .Name "solid1" 
+     .Component "component1" 
+     .Material "PEC" 
+     .Mode "Pointlist" 
+     .Height "26" 
+     .Twist "0.0" 
+     .Taper "0.0" 
+     .Origin "0.0", "0.0", "0.0" 
+     .Uvector "1.0", "0.0", "0.0" 
+     .Vvector "0.0", "1.0", "0.0" 
+     .Point "-33", "-2" 
+     .LineTo "-26", "2" 
+     .LineTo "-16", "1" 
+     .LineTo "-22", "-4" 
+     .LineTo "-33", "-2" 
+     .Create 
+End With
+
+define rotate: component1:solid1
+With Rotate 
+     .Reset 
+     .Name "solid1" 
+     .Component "component1" 
+     .Material "PEC" 
+     .Mode "Pointlist" 
+     .StartAngle "0.0" 
+     .Angle "360" 
+     .Height "0.0" 
+     .RadiusRatio "1.0" 
+     .NSteps "0" 
+     .SplitClosedEdges "True" 
+     .SegmentedProfile "False" 
+     .SimplifySolid "False" 
+     .UseAdvancedSegmentedRotation "True" 
+     .CutEndOff "False" 
+     .Origin "0.0", "0.0", "0.0" 
+     .Rvector "0.0", "1.0", "0.0" 
+     .Zvector "1.0", "0.0", "0.0" 
+     .Point "-0", "-20" 
+     .LineTo "70", "-100" 
+     .LineTo "90", "40" 
+     .LineTo "10", "60" 
+     .LineTo "-0", "-20" 
+     .Create 
+End With
+
+define loft: component1:solid3
+With Loft 
+     .Reset 
+     .Name "solid3" 
+     .Component "component1" 
+     .Material "PEC" 
+     .Tangency "0.0" 
+     .Minimizetwist "true" 
+     .CreateNew 
+End With
+
+boolean add shapes: component1:solid1, component1:solid2
+Solid.Add "component1:solid1", "component1:solid2"
+
+boolean intersect shapes: component1:solid1, component1:solid2
+Solid.Intersect "component1:solid1", "component1:solid2"
+
+boolean subtract shapes: component1:solid1, component1:solid2
+Solid.Subtract "component1:solid1", "component1:solid2"
+
+boolean insert shapes: component1:solid1, component1:solid2
+Solid.Insert "component1:solid1", "component1:solid2"
+
+pick face
+Pick.PickFaceFromId "component1:solid1", "4"
+
+pick edge
+Pick.PickEdgeFromId "component1:solid1", "3", "3"
+
+pick end point
+Pick.PickEndpointFromId "component1:solid1", "3"
+
+
+-----------------------------------------------------------------------------------------
+        Important VBA macros and its locations
+-----------------------------------------------------------------------------------------
+
+VBA MAcros -> Solver -> Ports -> Calculate port extension coefficient

@@ -38,6 +38,15 @@ CONFIG_PATH = PROJECT_ROOT / "config.json"
 
 
 DEFAULT_PARAMS: dict[str, dict[str, Any]] = {
+    "create_component": {"component": "component1"},
+    "define_brick": {
+        "name": "solid1",
+        "component": "component1",
+        "material": "PEC",
+        "xrange": [-16, -4],
+        "yrange": [-3, 2],
+        "zrange": [-3, 0],
+    },
     "set_units": {"geometry": "mm", "frequency": "ghz"},
     "set_frequency_range": {"start_ghz": 1.9, "stop_ghz": 2.9},
     "define_material": {
@@ -106,6 +115,24 @@ DEFAULT_PARAMS: dict[str, dict[str, Any]] = {
 
 SUPPORTED_COMMANDS = [
     "create_project",
+    "create_component",
+    "define_brick",
+    "define_sphere",
+    "define_cone",
+    "define_torus",
+    "define_cylinder",
+    "define_ecylinder",
+    "define_extrude",
+    "define_rotate",
+    "define_loft",
+    "boolean_add",
+    "boolean_intersect",
+    "boolean_subtract",
+    "boolean_insert",
+    "pick_face",
+    "pick_edge",
+    "pick_endpoint",
+    "calculate_port_extension_coefficient",
     "set_units",
     "set_frequency_range",
     "define_material",
