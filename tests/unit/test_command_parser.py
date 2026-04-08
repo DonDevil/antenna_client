@@ -90,6 +90,29 @@ def test_v2_validation_rejects_missing_required_command_params() -> None:
         parser.validate_package(package)
 
 
+def test_v2_validation_requires_component_for_geometry_commands() -> None:
+    parser = CommandParser()
+    payload = _base_package("cst_command_package.v2")
+    payload["commands"] = [
+        {
+            "seq": 1,
+            "command": "create_patch",
+            "params": {
+                "name": "patch",
+                "material": "PEC",
+                "center_mm": {"x": 0, "y": 0, "z": 1.6},
+                "length_mm": 31,
+                "width_mm": 36,
+                "thickness_mm": 0.035,
+            },
+        }
+    ]
+
+    package = parser.parse_package(payload)
+    with pytest.raises(ValueError, match="missing required params: component"):
+        parser.validate_package(package)
+
+
 def test_v2_validation_rejects_unknown_command() -> None:
     parser = CommandParser()
     payload = _base_package("cst_command_package.v2")
@@ -104,3 +127,16 @@ def test_v2_validation_rejects_unknown_command() -> None:
     package = parser.parse_package(payload)
     with pytest.raises(ValueError, match="is not declared in strict V2 contract"):
         parser.validate_package(package)
+
+
+def test_v2_validation_accepts_parameter_commands() -> None:
+    parser = CommandParser()
+    payload = _base_package("cst_command_package.v2")
+    payload["commands"] = [
+        {"seq": 1, "command": "define_parameter", "params": {"name": "px", "value": 37}},
+        {"seq": 2, "command": "update_parameter", "params": {"name": "px", "value": 41.5}},
+        {"seq": 3, "command": "rebuild_model", "params": {}},
+    ]
+
+    package = parser.parse_package(payload)
+    assert parser.validate_package(package) is True

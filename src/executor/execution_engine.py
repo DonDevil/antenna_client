@@ -181,6 +181,59 @@ class ExecutionEngine:
                     macro="",
                 )
 
+            if command.command == "rebuild_model":
+                full_history = bool(command.params.get("full_history", False))
+                vba_code = self.vba_generator.generate_macro(command.command, command.params)
+                artifacts_dir = Path("artifacts") / "vba"
+                artifacts_dir.mkdir(parents=True, exist_ok=True)
+                macro_path = artifacts_dir / f"{command.seq:02d}_{command.command}.bas"
+                macro_path.write_text(vba_code, encoding="utf-8")
+                if not self.dry_run and not self.cst_app.rebuild_model(full_history=full_history):
+                    return ExecutionResult(
+                        f"{command.seq}:{command.command}",
+                        success=False,
+                        error=f"Failed to rebuild CST model (full_history={full_history})",
+                        macro=vba_code,
+                    )
+                mode = "prepared" if self.dry_run else "executed"
+                return ExecutionResult(
+                    f"{command.seq}:{command.command}",
+                    success=True,
+                    output=f"{mode.capitalize()} rebuild_model successfully",
+                    macro=vba_code,
+                )
+
+            if command.command in {"define_parameter", "update_parameter", "set_parameter"}:
+                name = str(command.params.get("name", "")).strip()
+                value = command.params.get("value")
+                description = command.params.get("description")
+                create_only = command.command == "define_parameter"
+                vba_code = self.vba_generator.generate_macro(command.command, command.params)
+                artifacts_dir = Path("artifacts") / "vba"
+                artifacts_dir.mkdir(parents=True, exist_ok=True)
+                macro_path = artifacts_dir / f"{command.seq:02d}_{command.command}.bas"
+                macro_path.write_text(vba_code, encoding="utf-8")
+                if not self.dry_run and not self.cst_app.set_parameter(
+                    name=name,
+                    value=value,
+                    description=description,
+                    create_only=create_only,
+                ):
+                    return ExecutionResult(
+                        f"{command.seq}:{command.command}",
+                        success=False,
+                        error=f"Failed to set CST parameter '{name}'",
+                        macro=vba_code,
+                    )
+                mode = "prepared" if self.dry_run else "executed"
+                action = "define_parameter" if create_only else "update_parameter"
+                return ExecutionResult(
+                    f"{command.seq}:{command.command}",
+                    success=True,
+                    output=f"{mode.capitalize()} {action} via Parameter List API",
+                    macro=vba_code,
+                )
+
             if command.command == "export_s_parameters":
                 base_hint = str(command.params.get("destination_hint", "s11"))
                 destination_hint = self._scoped_destination_hint(package, base_hint)

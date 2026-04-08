@@ -39,6 +39,9 @@ CONFIG_PATH = PROJECT_ROOT / "config.json"
 
 DEFAULT_PARAMS: dict[str, dict[str, Any]] = {
     "create_component": {"component": "component1"},
+    "define_parameter": {"name": "px", "value": 37, "description": "Patch width"},
+    "update_parameter": {"name": "px", "value": 41.5},
+    "rebuild_model": {},
     "define_brick": {
         "name": "solid1",
         "component": "component1",
@@ -56,6 +59,7 @@ DEFAULT_PARAMS: dict[str, dict[str, Any]] = {
     },
     "create_substrate": {
         "name": "substrate",
+        "component": "antenna",
         "material": "FR-4 (lossy)",
         "length_mm": 56.0,
         "width_mm": 60.0,
@@ -64,6 +68,7 @@ DEFAULT_PARAMS: dict[str, dict[str, Any]] = {
     },
     "create_ground_plane": {
         "name": "ground",
+        "component": "antenna",
         "material": "Copper (annealed)",
         "length_mm": 56.0,
         "width_mm": 60.0,
@@ -72,6 +77,7 @@ DEFAULT_PARAMS: dict[str, dict[str, Any]] = {
     },
     "create_patch": {
         "name": "patch",
+        "component": "antenna",
         "material": "Copper (annealed)",
         "length_mm": 31.0,
         "width_mm": 36.0,
@@ -80,6 +86,7 @@ DEFAULT_PARAMS: dict[str, dict[str, Any]] = {
     },
     "create_feedline": {
         "name": "feed",
+        "component": "antenna",
         "material": "Copper (annealed)",
         "length_mm": 14.0,
         "width_mm": 0.8,
@@ -116,6 +123,9 @@ DEFAULT_PARAMS: dict[str, dict[str, Any]] = {
 SUPPORTED_COMMANDS = [
     "create_project",
     "create_component",
+    "define_parameter",
+    "update_parameter",
+    "rebuild_model",
     "define_brick",
     "define_sphere",
     "define_cone",
@@ -286,6 +296,41 @@ class CSTCommandConsole:
                 ) from exc
             self.refresh_project()
             print("Simulation completed.")
+            return
+
+        if command == "rebuild_model":
+            if self.mws is None:
+                raise RuntimeError("No active CST project. Run create_project first.")
+            params = self.merge_params(command, user_params)
+            self.refresh_project()
+            if bool(params.get("full_history", False)):
+                self.mws.full_history_rebuild()
+            else:
+                self.mws.Rebuild()
+            self.refresh_project()
+            print("Model rebuild completed.")
+            return
+
+        if command in {"define_parameter", "update_parameter", "set_parameter"}:
+            if self.mws is None:
+                raise RuntimeError("No active CST project. Run create_project first.")
+            params = self.merge_params(command, user_params)
+            name = str(params.get("name", "")).strip()
+            if not name:
+                raise RuntimeError("Parameter name is required.")
+            value = params.get("value")
+            if value is None:
+                raise RuntimeError("Parameter value is required.")
+
+            self.refresh_project()
+            if command == "define_parameter" and params.get("description") and hasattr(self.mws, "StoreParameterWithDescription"):
+                self.mws.StoreParameterWithDescription(name, str(value), str(params.get("description")))
+            elif isinstance(value, (int, float)) and hasattr(self.mws, "StoreDoubleParameter"):
+                self.mws.StoreDoubleParameter(name, float(value))
+            else:
+                self.mws.StoreParameter(name, str(value))
+            self.refresh_project()
+            print(f"Parameter updated via Parameter List API: {name}")
             return
 
         if command == "export_s_parameters":

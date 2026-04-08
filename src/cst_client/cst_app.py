@@ -165,6 +165,57 @@ class CSTApp:
             logger.error(f"Failed to run simulation: {exc}")
             return False
 
+    def rebuild_model(self, full_history: bool = False) -> bool:
+        """Rebuild the active model outside of history macro execution."""
+        self._refresh_active_project()
+        if not self.mws:
+            logger.error("No active project")
+            return False
+        try:
+            if full_history:
+                self.mws.full_history_rebuild()
+            else:
+                self.mws.Rebuild()
+            self._refresh_active_project()
+            return True
+        except Exception as exc:
+            logger.error(f"Failed to rebuild model: {exc}")
+            return False
+
+    def set_parameter(self, name: str, value: object, description: str | None = None, create_only: bool = False) -> bool:
+        """Set a project parameter through CST's parameter API, not history macros."""
+        self._refresh_active_project()
+        if not self.mws:
+            logger.error("No active project")
+            return False
+
+        parameter_name = str(name or "").strip()
+        if not parameter_name:
+            logger.error("Parameter name is required")
+            return False
+
+        text_value = str(value).strip()
+        if not text_value:
+            logger.error(f"Parameter value is required for '{parameter_name}'")
+            return False
+
+        try:
+            if create_only:
+                if description and hasattr(self.mws, "StoreParameterWithDescription"):
+                    self.mws.StoreParameterWithDescription(parameter_name, text_value, str(description))
+                else:
+                    self.mws.StoreParameter(parameter_name, text_value)
+            else:
+                if isinstance(value, (int, float)) and hasattr(self.mws, "StoreDoubleParameter"):
+                    self.mws.StoreDoubleParameter(parameter_name, float(value))
+                else:
+                    self.mws.StoreParameter(parameter_name, text_value)
+            self._refresh_active_project()
+            return True
+        except Exception as exc:
+            logger.error(f"Failed to set parameter '{parameter_name}': {exc}")
+            return False
+
     def export_s_parameters(self, destination_hint: str = "s11") -> Optional[str]:
         """Export S-parameter 1D curve to ASCII from common result tree locations."""
         self._refresh_active_project()

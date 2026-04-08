@@ -14,6 +14,8 @@ logger = get_logger(__name__)
 class VBAGenerator:
     """Generate VBA macro code from commands"""
 
+    DEFAULT_COMPONENT = "component1"
+
     @staticmethod
     def _sanitize_cst_name(value: Any) -> str:
         """Normalize names for CST object/material identifiers.
@@ -38,6 +40,46 @@ class VBAGenerator:
     @staticmethod
     def _component_object_name(component: Any, solid: Any) -> str:
         return f"{VBAGenerator._sanitize_cst_name(component)}:{VBAGenerator._sanitize_cst_name(solid)}"
+
+    @staticmethod
+    def _is_numeric_value(value: Any) -> bool:
+        if isinstance(value, (int, float)):
+            return True
+        if not isinstance(value, str):
+            return False
+        try:
+            float(value.strip())
+            return True
+        except ValueError:
+            return False
+
+    @classmethod
+    def _format_cst_value(cls, value: Any) -> str:
+        if cls._is_numeric_value(value):
+            return str(float(value))
+        return str(value).strip()
+
+    @classmethod
+    def _expr_binary(cls, left: Any, operator: str, right: Any) -> Any:
+        if cls._is_numeric_value(left) and cls._is_numeric_value(right):
+            left_value = float(left)
+            right_value = float(right)
+            if operator == "+":
+                return left_value + right_value
+            if operator == "-":
+                return left_value - right_value
+            if operator == "/":
+                return left_value / right_value
+        return f"({cls._format_cst_value(left)}){operator}({cls._format_cst_value(right)})"
+
+    @classmethod
+    def _centered_bounds(cls, center: Any, span: Any) -> tuple[Any, Any]:
+        half_span = cls._expr_binary(span, "/", 2)
+        return cls._expr_binary(center, "-", half_span), cls._expr_binary(center, "+", half_span)
+
+    @classmethod
+    def _component_name(cls, parameters: Dict[str, Any]) -> str:
+        return cls._sanitize_cst_name(parameters.get("component", cls.DEFAULT_COMPONENT))
     
     def generate_macro(self, command_type: str, parameters: Dict[str, Any]) -> str:
         """Generate VBA macro for command
@@ -67,6 +109,9 @@ class VBAGenerator:
             "define_extrude": self._define_extrude,
             "define_rotate": self._define_rotate,
             "define_loft": self._define_loft,
+            "define_parameter": self._define_parameter,
+            "update_parameter": self._update_parameter,
+            "rebuild_model": self._rebuild_model,
             "boolean_add": self._boolean_add,
             "boolean_intersect": self._boolean_intersect,
             "boolean_subtract": self._boolean_subtract,
@@ -98,6 +143,7 @@ class VBAGenerator:
             "extrude": self._define_extrude,
             "rotate": self._define_rotate,
             "loft": self._define_loft,
+            "set_parameter": self._update_parameter,
             "solid_add": self._boolean_add,
             "solid_intersect": self._boolean_intersect,
             "solid_subtract": self._boolean_subtract,
@@ -111,19 +157,31 @@ class VBAGenerator:
         logger.debug(f"Generated macro for {command_type}")
         return macro_code
 
-    @staticmethod
-    def _brick(name: str, material: str, x_min: float, x_max: float, y_min: float, y_max: float, z_min: float, z_max: float) -> str:
-        safe_name = VBAGenerator._sanitize_cst_name(name)
-        safe_material = VBAGenerator._sanitize_cst_name(material)
+    @classmethod
+    def _brick(
+        cls,
+        name: str,
+        component: str,
+        material: str,
+        x_min: Any,
+        x_max: Any,
+        y_min: Any,
+        y_max: Any,
+        z_min: Any,
+        z_max: Any,
+    ) -> str:
+        safe_name = cls._sanitize_cst_name(name)
+        safe_component = cls._sanitize_cst_name(component)
+        safe_material = cls._sanitize_cst_name(material)
         return f"""
 With Brick
     .Reset
     .Name \"{safe_name}\"
-    .Component \"component1\"
+    .Component \"{safe_component}\"
     .Material \"{safe_material}\"
-    .Xrange \"{x_min}\", \"{x_max}\"
-    .Yrange \"{y_min}\", \"{y_max}\"
-    .Zrange \"{z_min}\", \"{z_max}\"
+    .Xrange \"{cls._format_cst_value(x_min)}\", \"{cls._format_cst_value(x_max)}\"
+    .Yrange \"{cls._format_cst_value(y_min)}\", \"{cls._format_cst_value(y_max)}\"
+    .Zrange \"{cls._format_cst_value(z_min)}\", \"{cls._format_cst_value(z_max)}\"
     .Create
 End With
 """.strip()
@@ -132,24 +190,25 @@ End With
         raise ValueError("create_project must be handled by the caller, not emitted as VBA")
 
     def _create_component(self, parameters: Dict[str, Any]) -> str:
-        component_name = self._sanitize_cst_name(parameters.get("component", parameters.get("name", "component1")))
+        component_name = self._sanitize_cst_name(parameters.get("component", parameters.get("name", self.DEFAULT_COMPONENT)))
         return f'Component.New "{component_name}"'
 
     def _define_brick(self, parameters: Dict[str, Any]) -> str:
         return self._brick(
             parameters["name"],
+            self._component_name(parameters),
             parameters.get("material", "PEC"),
-            float(parameters["xrange"][0]),
-            float(parameters["xrange"][1]),
-            float(parameters["yrange"][0]),
-            float(parameters["yrange"][1]),
-            float(parameters["zrange"][0]),
-            float(parameters["zrange"][1]),
+            parameters["xrange"][0],
+            parameters["xrange"][1],
+            parameters["yrange"][0],
+            parameters["yrange"][1],
+            parameters["zrange"][0],
+            parameters["zrange"][1],
         )
 
     def _define_sphere(self, parameters: Dict[str, Any]) -> str:
         name = self._sanitize_cst_name(parameters["name"])
-        component = self._sanitize_cst_name(parameters.get("component", "component1"))
+        component = self._component_name(parameters)
         material = self._sanitize_cst_name(parameters.get("material", "PEC"))
         center = parameters["center"]
         segments = parameters.get("segments", 0)
@@ -171,7 +230,7 @@ End With
 
     def _define_cone(self, parameters: Dict[str, Any]) -> str:
         name = self._sanitize_cst_name(parameters["name"])
-        component = self._sanitize_cst_name(parameters.get("component", "component1"))
+        component = self._component_name(parameters)
         material = self._sanitize_cst_name(parameters.get("material", "PEC"))
         zrange = parameters["zrange"]
         return f"""
@@ -193,7 +252,7 @@ End With
 
     def _define_torus(self, parameters: Dict[str, Any]) -> str:
         name = self._sanitize_cst_name(parameters["name"])
-        component = self._sanitize_cst_name(parameters.get("component", "component1"))
+        component = self._component_name(parameters)
         material = self._sanitize_cst_name(parameters.get("material", "PEC"))
         center = parameters.get("center", [0, 0, 0])
         return f"""
@@ -215,7 +274,7 @@ End With
 
     def _define_cylinder(self, parameters: Dict[str, Any]) -> str:
         name = self._sanitize_cst_name(parameters["name"])
-        component = self._sanitize_cst_name(parameters.get("component", "component1"))
+        component = self._component_name(parameters)
         material = self._sanitize_cst_name(parameters.get("material", "PEC"))
         zrange = parameters["zrange"]
         center = parameters.get("center", [0, 0])
@@ -238,7 +297,7 @@ End With
 
     def _define_ecylinder(self, parameters: Dict[str, Any]) -> str:
         name = self._sanitize_cst_name(parameters["name"])
-        component = self._sanitize_cst_name(parameters.get("component", "component1"))
+        component = self._component_name(parameters)
         material = self._sanitize_cst_name(parameters.get("material", "PEC"))
         zrange = parameters["zrange"]
         center = parameters.get("center", [0, 0])
@@ -271,7 +330,7 @@ End With
 
     def _define_extrude(self, parameters: Dict[str, Any]) -> str:
         name = self._sanitize_cst_name(parameters["name"])
-        component = self._sanitize_cst_name(parameters.get("component", "component1"))
+        component = self._component_name(parameters)
         material = self._sanitize_cst_name(parameters.get("material", "PEC"))
         origin = parameters.get("origin", [0.0, 0.0, 0.0])
         uvector = parameters.get("uvector", [1.0, 0.0, 0.0])
@@ -298,7 +357,7 @@ End With
 
     def _define_rotate(self, parameters: Dict[str, Any]) -> str:
         name = self._sanitize_cst_name(parameters["name"])
-        component = self._sanitize_cst_name(parameters.get("component", "component1"))
+        component = self._component_name(parameters)
         material = self._sanitize_cst_name(parameters.get("material", "PEC"))
         origin = parameters.get("origin", [0.0, 0.0, 0.0])
         rvector = parameters.get("rvector", [0.0, 1.0, 0.0])
@@ -332,7 +391,7 @@ End With
 
     def _define_loft(self, parameters: Dict[str, Any]) -> str:
         name = self._sanitize_cst_name(parameters["name"])
-        component = self._sanitize_cst_name(parameters.get("component", "component1"))
+        component = self._component_name(parameters)
         material = self._sanitize_cst_name(parameters.get("material", "PEC"))
         return f"""
 With Loft
@@ -345,6 +404,27 @@ With Loft
     .CreateNew
 End With
 """.strip()
+
+    def _define_parameter(self, parameters: Dict[str, Any]) -> str:
+        name = self._sanitize_cst_name(parameters["name"])
+        value = self._format_cst_value(parameters["value"])
+        description = parameters.get("description")
+        if description:
+            safe_description = str(description).replace('"', "")
+            return f'StoreParameterWithDescription "{name}", "{value}", "{safe_description}"'
+        return f'StoreParameter "{name}", "{value}"'
+
+    def _update_parameter(self, parameters: Dict[str, Any]) -> str:
+        name = self._sanitize_cst_name(parameters["name"])
+        value = parameters["value"]
+        if isinstance(value, (int, float)):
+            return f'StoreDoubleParameter "{name}", {float(value)}'
+        return f'StoreParameter "{name}", "{self._format_cst_value(value)}"'
+
+    def _rebuild_model(self, parameters: Dict[str, Any]) -> str:
+        if parameters.get("full_history", False):
+            return "Rebuild\nFullHistoryRebuild"
+        return "Rebuild"
 
     def _boolean_add(self, parameters: Dict[str, Any]) -> str:
         lhs = self._component_object_name(parameters["component"], parameters["target"])
@@ -437,44 +517,38 @@ End With
 
     def _create_substrate(self, parameters: Dict[str, Any]) -> str:
         origin = parameters["origin_mm"]
-        x_min = origin["x"] - (parameters["length_mm"] / 2.0)
-        x_max = origin["x"] + (parameters["length_mm"] / 2.0)
-        y_min = origin["y"] - (parameters["width_mm"] / 2.0)
-        y_max = origin["y"] + (parameters["width_mm"] / 2.0)
+        x_min, x_max = self._centered_bounds(origin["x"], parameters["length_mm"])
+        y_min, y_max = self._centered_bounds(origin["y"], parameters["width_mm"])
         z_min = origin["z"]
-        z_max = origin["z"] + parameters["height_mm"]
-        return self._brick(parameters["name"], parameters["material"], x_min, x_max, y_min, y_max, z_min, z_max)
+        z_max = self._expr_binary(origin["z"], "+", parameters["height_mm"])
+        return self._brick(parameters["name"], self._component_name(parameters), parameters["material"], x_min, x_max, y_min, y_max, z_min, z_max)
 
     def _create_ground_plane(self, parameters: Dict[str, Any]) -> str:
-        x_min = -(parameters["length_mm"] / 2.0)
-        x_max = parameters["length_mm"] / 2.0
-        y_min = -(parameters["width_mm"] / 2.0)
-        y_max = parameters["width_mm"] / 2.0
+        x_min, x_max = self._centered_bounds(0, parameters["length_mm"])
+        y_min, y_max = self._centered_bounds(0, parameters["width_mm"])
         z_min = parameters["z_mm"]
-        z_max = parameters["z_mm"] + parameters["thickness_mm"]
-        return self._brick(parameters["name"], parameters["material"], x_min, x_max, y_min, y_max, z_min, z_max)
+        z_max = self._expr_binary(parameters["z_mm"], "+", parameters["thickness_mm"])
+        return self._brick(parameters["name"], self._component_name(parameters), parameters["material"], x_min, x_max, y_min, y_max, z_min, z_max)
 
     def _create_patch(self, parameters: Dict[str, Any]) -> str:
         center = parameters["center_mm"]
-        x_min = center["x"] - (parameters["length_mm"] / 2.0)
-        x_max = center["x"] + (parameters["length_mm"] / 2.0)
-        y_min = center["y"] - (parameters["width_mm"] / 2.0)
-        y_max = center["y"] + (parameters["width_mm"] / 2.0)
+        x_min, x_max = self._centered_bounds(center["x"], parameters["length_mm"])
+        y_min, y_max = self._centered_bounds(center["y"], parameters["width_mm"])
         z_min = center["z"]
-        z_max = center["z"] + parameters["thickness_mm"]
-        return self._brick(parameters["name"], parameters["material"], x_min, x_max, y_min, y_max, z_min, z_max)
+        z_max = self._expr_binary(center["z"], "+", parameters["thickness_mm"])
+        return self._brick(parameters["name"], self._component_name(parameters), parameters["material"], x_min, x_max, y_min, y_max, z_min, z_max)
 
     def _create_feedline(self, parameters: Dict[str, Any]) -> str:
         start = parameters["start_mm"]
         end = parameters["end_mm"]
-        half_width = parameters["width_mm"] / 2.0
-        x_min = min(start["x"], end["x"]) - half_width
-        x_max = max(start["x"], end["x"]) + half_width
-        y_min = min(start["y"], end["y"]) - half_width
-        y_max = max(start["y"], end["y"]) + half_width
+        half_width = self._expr_binary(parameters["width_mm"], "/", 2)
+        x_min = self._expr_binary(min(start["x"], end["x"]), "-", half_width)
+        x_max = self._expr_binary(max(start["x"], end["x"]), "+", half_width)
+        y_min = self._expr_binary(min(start["y"], end["y"]), "-", half_width)
+        y_max = self._expr_binary(max(start["y"], end["y"]), "+", half_width)
         z_min = start["z"]
-        z_max = start["z"] + parameters["thickness_mm"]
-        return self._brick(parameters["name"], parameters["material"], x_min, x_max, y_min, y_max, z_min, z_max)
+        z_max = self._expr_binary(start["z"], "+", parameters["thickness_mm"])
+        return self._brick(parameters["name"], self._component_name(parameters), parameters["material"], x_min, x_max, y_min, y_max, z_min, z_max)
 
     def _create_port(self, parameters: Dict[str, Any]) -> str:
         p1 = parameters.get("p1_mm") or parameters.get("reference_mm")
