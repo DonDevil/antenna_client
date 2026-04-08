@@ -71,25 +71,31 @@ class ChatRequestWorker(_BaseWorker):
             self.error_occurred.emit(str(e))
 
     async def _chat_async(self, base_url: str) -> dict[str, Any]:
-        endpoint_name = "/api/v1/intent/parse" if self.chat_mode == "speed" else "/api/v1/chat"
+        endpoint_name = "/api/v1/chat + /api/v1/intent/parse"
         started_at = time.perf_counter()
         async with ServerConnector(base_url, timeout_sec=30) as connector:
             api = ApiClient(connector)
-            response: dict[str, Any]
-            if self.chat_mode == "quality":
-                try:
-                    response = await api.chat(self.user_message, self.requirements)
-                except Exception:
-                    response = {}
-            else:
-                try:
-                    response = {"intent_summary": await api.parse_intent(self.user_message)}
-                except Exception:
-                    response = {}
+            chat_task = asyncio.create_task(api.chat(self.user_message, self.requirements))
+            intent_task = asyncio.create_task(api.parse_intent(self.user_message))
+            chat_result, intent_result = await asyncio.gather(chat_task, intent_task, return_exceptions=True)
+
+            response: dict[str, Any] = {}
+            intent_summary: dict[str, Any] = {}
+
+            if isinstance(chat_result, Exception):
+                logger.warning(f"Chat endpoint failed: {type(chat_result).__name__}: {chat_result}")
+            elif isinstance(chat_result, dict):
+                response = chat_result
+
+            if isinstance(intent_result, Exception):
+                logger.warning(f"Intent parse endpoint failed: {type(intent_result).__name__}: {intent_result}")
+            elif isinstance(intent_result, dict):
+                intent_summary = intent_result
         elapsed_ms = round((time.perf_counter() - started_at) * 1000.0, 2)
 
-        # Keep chat responsive: avoid extra intent endpoint round-trip on each message.
-        intent_summary = response.get("intent_summary") if isinstance(response, dict) else {}
+        # Prefer explicit intent endpoint output; fall back to chat payload if provided.
+        if not intent_summary:
+            intent_summary = response.get("intent_summary") if isinstance(response, dict) else {}
         if not intent_summary:
             parsed_freq, parsed_bw = extract_frequency_bandwidth(self.user_message)
             parsed_family = extract_antenna_family(self.user_message)
@@ -112,21 +118,7 @@ class ChatRequestWorker(_BaseWorker):
 
         assistant_message = response.get("assistant_message")
         if not assistant_message:
-            missing = [
-                label
-                for label, value in {
-                    "frequency_ghz": requirements.get("frequency_ghz"),
-                    "bandwidth_mhz": requirements.get("bandwidth_mhz"),
-                    "antenna_family": requirements.get("antenna_family"),
-                }.items()
-                if value in (None, "")
-            ]
-            if missing:
-                assistant_message = f"I still need: {', '.join(missing)}."
-            else:
-                assistant_message = (
-                    "Requirements captured. Review the fields on the right, then press Start Pipeline."
-                )
+            assistant_message = "I can help with design tradeoffs, constraints, and recommendations."
 
         return {
             "assistant_message": assistant_message,
@@ -270,36 +262,11 @@ class ChatMessageHandler:
         """Send chat text to the server chat/intake path, not optimize."""
         logger.info(f"User message received: {message}")
 
-        if len(message.strip()) < 3:
-            self.chat_widget.add_message("Please provide a longer message so I can extract antenna requirements.", "assistant")
+        if not message.strip():
             return
 
-        category = self.classify_user_message(message)
-
-        if category == "vague_input":
-            self.chat_widget.add_message(
-                "Please include target frequency (GHz), bandwidth (MHz), and antenna family (amc_patch, microstrip_patch, or wban_patch).",
-                "assistant",
-            )
-            self.chat_widget.add_message("Status: local routing classified message as vague input.", "system")
-            self._show_status("Local routing: vague input, no endpoint call.", timeout_ms=8000)
-            return
-
-        if category == "capability_question":
-            local_caps = self._build_capability_response()
-            if local_caps:
-                self.chat_widget.add_message(local_caps, "assistant")
-                self.chat_widget.add_message("Status: local capability response (0 ms).", "system")
-                self._show_status("Local routing: answered capabilities without endpoint call.", timeout_ms=8000)
-                return
-
-        chat_mode = self.design_panel.get_chat_mode()
-        if category == "general_chat" and chat_mode == "speed":
-            # Intent parse is tuned for extraction; general chat should use rich assistant output.
-            chat_mode = "quality"
-
-        mode_label = "speed" if chat_mode == "speed" else "quality"
-        self._show_status(f"Extracting requirements from chat ({mode_label} mode)...")
+        chat_mode = "quality"
+        self._show_status("Sending message to assistant...")
         self.current_worker = ChatRequestWorker(message, self.requirements.copy(), chat_mode=chat_mode)
         self.current_worker.response_ready.connect(self.on_chat_response_received)
         self.current_worker.error_occurred.connect(self.on_error_occurred)

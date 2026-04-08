@@ -146,6 +146,64 @@ class DesignController(QObject):
         worker.error_occurred.connect(self._on_worker_error)
         self._start_worker("connection_worker", worker)
 
+    @Slot(str)
+    def handleCommand(self, command_text: str):
+        """Parse and execute chat commands like /help, /start, etc."""
+        parts = command_text.strip().split(maxsplit=1)
+        cmd = parts[0].lower()
+        args = parts[1] if len(parts) > 1 else ""
+
+        if cmd == "/help":
+            help_text = (
+                "Available commands:\n"
+                "/help - Show this help message\n"
+                "/start - Start a new antenna design optimization\n"
+                "/clear - Clear chat and reset design\n"
+                "/reconnect - Manually reconnect to all services\n"
+                "/save_session <name> - Save current session with a name\n"
+                "/feedback - Submit feedback on current design\n"
+                "/status - Show current connection status"
+            )
+            self.chat_history.append({"sender": "System", "message": help_text})
+            self.chatMessageReceived.emit("System", help_text)
+        elif cmd == "/start":
+            self.startDesign()
+        elif cmd == "/clear":
+            self.clearDesign()
+            self.chat_history.append({"sender": "System", "message": "Design and chat cleared."})
+            self.chatMessageReceived.emit("System", "Design and chat cleared.")
+        elif cmd == "/reconnect":
+            self.statusChanged.emit("Reconnecting services...")
+            self.refreshConnections()
+            self.chat_history.append({"sender": "System", "message": "Reconnection request sent."})
+            self.chatMessageReceived.emit("System", "Reconnection request sent.")
+        elif cmd == "/save_session":
+            if not args:
+                error_msg = "Usage: /save_session <session_name>"
+                self.chat_history.append({"sender": "System", "message": error_msg})
+                self.chatMessageReceived.emit("System", error_msg)
+            else:
+                self.saveCurrentSession(args)
+                self.chat_history.append({"sender": "System", "message": f"Session saved as '{args}'."})
+                self.chatMessageReceived.emit("System", f"Session saved as '{args}'.")
+        elif cmd == "/feedback":
+            feedback_payload = json.dumps({
+                "actual_frequency": self.last_result.get("actual_frequency", ""),
+                "actual_bandwidth": self.last_result.get("actual_bandwidth", ""),
+                "actual_gain": self.last_result.get("gain_db", ""),
+                "actual_vswr": self.last_result.get("vswr", ""),
+                "farfield": self.last_result.get("farfield", "")
+            })
+            self.submitFeedback(feedback_payload)
+        elif cmd == "/status":
+            status_text = f"Session: {self.session_name or 'Unnamed'}\nDesign: {self.current_design or 'None'}\nStage: {self.current_stage}"
+            self.chat_history.append({"sender": "System", "message": status_text})
+            self.chatMessageReceived.emit("System", status_text)
+        else:
+            error_msg = f"Unknown command: {cmd}. Type /help for available commands."
+            self.chat_history.append({"sender": "System", "message": error_msg})
+            self.chatMessageReceived.emit("System", error_msg)
+
     @Slot(str, str)
     def sendChatMessage(self, message: str, chatMode: str):
         message = str(message or "").strip()

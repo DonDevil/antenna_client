@@ -391,8 +391,13 @@ ApplicationWindow {
         if (text.length === 0) {
             return
         }
-        designController.sendChatMessage(text, "speed")
         chatInputField.text = ""
+
+        if (text.startsWith("/")) {
+            designController.handleCommand(text)
+        } else {
+            designController.sendChatMessage(text, "speed")
+        }
     }
 
     function feedbackPayload() {
@@ -699,6 +704,25 @@ ApplicationWindow {
                 MouseArea {
                     anchors.fill: parent
                     onClicked: designController.restartApplication()
+                }
+            }
+
+            Rectangle {
+                width: 84
+                height: 24
+                color: "transparent"
+                Text {
+                    anchors.centerIn: parent
+                    text: "Reconnect"
+                    font.pixelSize: 30 * 0.45
+                    color: "#1f1f1f"
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: {
+                        root.statusText = "Reconnecting services..."
+                        designController.refreshConnections()
+                    }
                 }
             }
         }
@@ -1282,239 +1306,313 @@ ApplicationWindow {
             width: rightPanel.x - 56
             height: parent.height - 90
 
-            Rectangle {
-                id: chatHistory
-                x: 0
-                y: 0
-                width: parent.width
-                height: 180
-                color: chatBg
+            Flickable {
+                id: leftPaneScroller
+                anchors.fill: parent
+                clip: true
+                contentWidth: width
+                contentHeight: manualPage.y + manualPage.height + 16
 
-                ListView {
-                    id: chatList
-                    anchors.fill: parent
-                    anchors.margins: 8
-                    model: chatModel
-                    clip: true
-                    spacing: 4
-                    delegate: Row {
-                        spacing: 8
-                        Text {
-                            text: sender + ":"
-                            font.bold: true
-                            font.pixelSize: 24 * 0.45
-                            color: "#1f1f1f"
+                ScrollBar.vertical: ScrollBar {
+                    policy: ScrollBar.AsNeeded
+                }
+
+                Item {
+                    width: leftPaneScroller.width
+                    height: leftPaneScroller.contentHeight
+
+                    Item {
+                        id: chatPage
+                        x: 0
+                        y: 0
+                        width: parent.width
+                        height: leftArea.height
+
+                        Rectangle {
+                            id: chatHistory
+                            x: 0
+                            y: 0
+                            width: parent.width
+                            height: chatPage.height - 116
+                            color: chatBg
+
+                            ListView {
+                                id: chatList
+                                anchors.fill: parent
+                                anchors.margins: 8
+                                anchors.rightMargin: 16
+                                model: chatModel
+                                clip: true
+                                spacing: 8
+                                delegate: Item {
+                                    width: chatList.width
+                                    height: messageCard.height + 8
+
+                                    property bool isUserMessage: sender === "You"
+                                    property bool isSystemMessage: sender === "System"
+                                    property bool isAssistantMessage: sender === "Assistant"
+
+                                    Rectangle {
+                                        id: messageCard
+                                        width: Math.min(chatList.width * 0.75, chatList.width - 20)
+                                        height: messageColumn.implicitHeight + 24
+                                        y: 0
+                                        x: isUserMessage ? (chatList.width - width - 8) : 0
+                                        radius: 12
+                                        color: isUserMessage ? "#d4e1ff" : (isSystemMessage ? "#ffe0e0" : "#e0f7e0")
+                                        border.width: 1
+                                        border.color: isUserMessage ? "#a8c8ff" : (isSystemMessage ? "#ffb0b0" : "#90ee90")
+
+                                        Column {
+                                            id: messageColumn
+                                            x: 12
+                                            y: 12
+                                            width: parent.width - 24
+                                            spacing: 6
+
+                                            Text {
+                                                width: parent.width
+                                                text: sender
+                                                font.bold: true
+                                                font.pixelSize: 28 * 0.45
+                                                color: isUserMessage ? "#1b3f8b" : (isSystemMessage ? "#8c1d18" : "#145a32")
+                                            }
+
+                                            Text {
+                                                width: parent.width
+                                                wrapMode: Text.WordWrap
+                                                text: message
+                                                font.pixelSize: 30 * 0.45
+                                                color: isUserMessage ? "#102a5c" : (isSystemMessage ? "#7a1813" : "#103d22")
+                                            }
+                                        }
+                                    }
+                                }
+
+                                ScrollBar.vertical: ScrollBar {
+                                    policy: ScrollBar.AsNeeded
+                                }
+                            }
                         }
+
+                        Rectangle {
+                            id: chatInput
+                            x: 0
+                            y: chatHistory.height + 8
+                            width: parent.width - 110
+                            height: 48
+                            color: "#bea1a1"
+
+                            TextField {
+                                id: chatInputField
+                                anchors.fill: parent
+                                anchors.margins: 6
+                                placeholderText: "Type a message..."
+                                font.pixelSize: 32 * 0.45
+                                color: "#111111"
+                                placeholderTextColor: "#6a5454"
+                                onAccepted: root.sendMessage()
+                                background: Rectangle { color: "transparent" }
+                            }
+                        }
+
+                        Rectangle {
+                            id: sendBtn
+                            x: parent.width - 90
+                            y: chatHistory.height + 8
+                            width: 90
+                            height: 48
+                            color: "#6da8f4"
+                            Text {
+                                anchors.centerIn: parent
+                                text: "Send"
+                                font.pixelSize: 38 * 0.45
+                                color: "#111"
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                onClicked: root.sendMessage()
+                            }
+                        }
+
+                        Row {
+                            id: statusRow
+                            y: chatInput.y + chatInput.height + 10
+                            anchors.horizontalCenter: chatInput.horizontalCenter
+                            spacing: 28
+
+                            function dotColor(name) {
+                                if (name === "ANN") return root.annConnected ? "#18d818" : "#f00"
+                                if (name === "LLM") return root.llmConnected ? "#18d818" : "#f00"
+                                if (name === "CST") return root.cstConnected ? "#18d818" : "#f00"
+                                return root.commConnected ? "#18d818" : "#f00"
+                            }
+
+                            Repeater {
+                                model: ["ANN", "LLM", "CST", "COM"]
+                                delegate: Row {
+                                    spacing: 8
+                                    Text {
+                                        text: modelData
+                                        font.pixelSize: 38 * 0.45
+                                        color: "#111"
+                                    }
+                                    Rectangle {
+                                        width: 15
+                                        height: 15
+                                        radius: 7.5
+                                        color: statusRow.dotColor(modelData)
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+                                }
+                            }
+                        }
+
                         Text {
-                            width: chatList.width - 90
-                            wrapMode: Text.WordWrap
-                            text: message
-                            font.pixelSize: 24 * 0.45
-                            color: "#1f1f1f"
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            y: statusRow.y + 30
+                            text: "Scroll down for manual inputs"
+                            font.pixelSize: 16 * 0.45
+                            color: "#333"
                         }
                     }
-                }
-            }
 
-            Rectangle {
-                id: chatInput
-                x: 0
-                y: chatHistory.height + 8
-                width: parent.width - 110
-                height: 48
-                color: "#bea1a1"
+                    Rectangle {
+                        id: manualPage
+                        x: 0
+                        y: chatPage.height + 16
+                        width: parent.width
+                        height: 290
+                        color: panelBg
 
-                TextField {
-                    id: chatInputField
-                    anchors.fill: parent
-                    anchors.margins: 6
-                    placeholderText: "Type a message..."
-                    onAccepted: root.sendMessage()
-                    background: Rectangle { color: "transparent" }
-                }
-            }
-
-            Rectangle {
-                id: sendBtn
-                x: parent.width - 90
-                y: chatHistory.height + 8
-                width: 90
-                height: 48
-                color: "#6da8f4"
-                Text {
-                    anchors.centerIn: parent
-                    text: "Send"
-                    font.pixelSize: 38 * 0.45
-                    color: "#111"
-                }
-                MouseArea {
-                    anchors.fill: parent
-                    onClicked: root.sendMessage()
-                }
-            }
-
-            Row {
-                id: statusRow
-                x: 0
-                y: chatHistory.height + 66
-                spacing: 28
-
-                function dotColor(name) {
-                    if (name === "ANN") return root.annConnected ? "#18d818" : "#f00"
-                    if (name === "LLM") return root.llmConnected ? "#18d818" : "#f00"
-                    if (name === "CST") return root.cstConnected ? "#18d818" : "#f00"
-                    return root.commConnected ? "#18d818" : "#f00"
-                }
-
-                Repeater {
-                    model: ["ANN", "LLM", "CST", "Comm"]
-                    delegate: Row {
-                        spacing: 8
                         Text {
-                            text: modelData
-                            font.pixelSize: 38 * 0.45
+                            x: 20
+                            y: 12
+                            text: "Manual Inputs"
+                            font.pixelSize: 34 * 0.45
                             color: "#111"
                         }
+
+                        Text { x: 20; y: 48; text: "Substrate Material"; font.pixelSize: 35 * 0.45; color: "#111" }
+                        TextField {
+                            id: substrateField
+                            x: 210
+                            y: 44
+                            width: 170
+                            height: 24
+                            text: "FR4"
+                            background: Rectangle { color: fieldBg }
+                        }
+
+                        Text { x: 20; y: 90; text: "Conductor Material"; font.pixelSize: 35 * 0.45; color: "#111" }
+                        TextField {
+                            id: conductorField
+                            x: 210
+                            y: 86
+                            width: 170
+                            height: 24
+                            text: "Copper"
+                            background: Rectangle { color: fieldBg }
+                        }
+
+                        Text { x: 410; y: 48; text: "Resonant Frequency (GHz)"; font.pixelSize: 35 * 0.45; color: "#111" }
+                        TextField {
+                            id: frequencyField
+                            x: 650
+                            y: 44
+                            width: 130
+                            height: 24
+                            text: "2.45"
+                            background: Rectangle { color: fieldBg }
+                        }
+
+                        Text { x: 410; y: 90; text: "Resonant Bandwidth (MHz)"; font.pixelSize: 35 * 0.45; color: "#111" }
+                        TextField {
+                            id: bandwidthField
+                            x: 650
+                            y: 86
+                            width: 130
+                            height: 24
+                            text: "450"
+                            background: Rectangle { color: fieldBg }
+                        }
+
+                        Text { x: 250; y: 130; text: "Antenna Family"; font.pixelSize: 38 * 0.45; color: "#111" }
+                        TextField {
+                            id: antennaFamilyField
+                            x: 410
+                            y: 126
+                            width: 150
+                            height: 24
+                            text: "Patch"
+                            background: Rectangle { color: fieldBg }
+                        }
+
                         Rectangle {
-                            width: 15
-                            height: 15
-                            radius: 7.5
-                            color: statusRow.dotColor(modelData)
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
-                    }
-                }
-            }
-
-            Rectangle {
-                id: bottomForm
-                x: 0
-                y: statusRow.y + 38
-                width: parent.width
-                height: 210
-                color: panelBg
-
-                // Left two rows
-                Text { x: 20; y: 24; text: "Substrate Material"; font.pixelSize: 35 * 0.45; color: "#111" }
-                TextField {
-                    id: substrateField
-                    x: 210
-                    y: 20
-                    width: 170
-                    height: 24
-                    text: "FR4"
-                    background: Rectangle { color: fieldBg }
-                }
-
-                Text { x: 20; y: 66; text: "Conductor Material"; font.pixelSize: 35 * 0.45; color: "#111" }
-                TextField {
-                    id: conductorField
-                    x: 210
-                    y: 62
-                    width: 170
-                    height: 24
-                    text: "Copper"
-                    background: Rectangle { color: fieldBg }
-                }
-
-                // Right two rows
-                Text { x: 410; y: 24; text: "Resonant Frequency (GHz)"; font.pixelSize: 35 * 0.45; color: "#111" }
-                TextField {
-                    id: frequencyField
-                    x: 650
-                    y: 20
-                    width: 130
-                    height: 24
-                    text: "2.45"
-                    background: Rectangle { color: fieldBg }
-                }
-
-                Text { x: 410; y: 66; text: "Resonant Bandwidth (MHz)"; font.pixelSize: 35 * 0.45; color: "#111" }
-                TextField {
-                    id: bandwidthField
-                    x: 650
-                    y: 62
-                    width: 130
-                    height: 24
-                    text: "450"
-                    background: Rectangle { color: fieldBg }
-                }
-
-                // Center row
-                Text { x: 250; y: 106; text: "Antenna Family"; font.pixelSize: 38 * 0.45; color: "#111" }
-                TextField {
-                    id: antennaFamilyField
-                    x: 410
-                    y: 102
-                    width: 150
-                    height: 24
-                    text: "Patch"
-                    background: Rectangle { color: fieldBg }
-                }
-
-                // Buttons
-                Rectangle {
-                    x: 150
-                    y: 155
-                    width: 180
-                    height: 38
-                    color: btnBg
-                    Text { anchors.centerIn: parent; text: "Start"; font.pixelSize: 38 * 0.45; color: "#111" }
-                    MouseArea {
-                        anchors.fill: parent
-                        onClicked: {
-                            var payload = {
-                                "substrate_material": substrateField.text,
-                                "conductor_material": conductorField.text,
-                                "frequency_ghz": Number(frequencyField.text),
-                                "bandwidth_mhz": Number(bandwidthField.text),
-                                "antenna_family": antennaFamilyField.text
+                            x: 150
+                            y: 185
+                            width: 180
+                            height: 38
+                            color: btnBg
+                            Text { anchors.centerIn: parent; text: "Start"; font.pixelSize: 38 * 0.45; color: "#111" }
+                            MouseArea {
+                                anchors.fill: parent
+                                onClicked: {
+                                    var payload = {
+                                        "substrate_material": substrateField.text,
+                                        "conductor_material": conductorField.text,
+                                        "frequency_ghz": Number(frequencyField.text),
+                                        "bandwidth_mhz": Number(bandwidthField.text),
+                                        "antenna_family": antennaFamilyField.text
+                                    }
+                                    designController.updateDesignParameter(JSON.stringify(payload))
+                                    designController.startDesign()
+                                }
                             }
-                            designController.updateDesignParameter(JSON.stringify(payload))
-                            designController.startDesign()
                         }
-                    }
-                }
-                Rectangle {
-                    x: 460
-                    y: 155
-                    width: 180
-                    height: 38
-                    color: btnBg
-                    Text { anchors.centerIn: parent; text: "Clear"; font.pixelSize: 38 * 0.45; color: "#111" }
-                    MouseArea {
-                        anchors.fill: parent
-                        onClicked: {
-                            substrateField.text = ""
-                            conductorField.text = ""
-                            frequencyField.text = ""
-                            bandwidthField.text = ""
-                            antennaFamilyField.text = ""
-                            chatInputField.text = ""
-                            chatModel.clear()
-                            patchWidthValue.text = ""
-                            patchLengthValue.text = ""
-                            substrateWidthValue.text = ""
-                            substrateLengthValue.text = ""
-                            feedWidthValue.text = ""
-                            feedLengthValue.text = ""
-                            actualFrequencyValue.text = ""
-                            actualBandwidthValue.text = ""
-                            farfieldValue.text = ""
-                            gainValue.text = ""
-                            vswrValue.text = ""
-                            designController.clearDesign()
-                        }
-                    }
-                }
-            }
 
-            Text {
-                x: 0
-                y: bottomForm.y + bottomForm.height + 6
-                text: root.statusText
-                font.pixelSize: 18 * 0.45
-                color: "#333"
+                        Rectangle {
+                            x: 460
+                            y: 185
+                            width: 180
+                            height: 38
+                            color: btnBg
+                            Text { anchors.centerIn: parent; text: "Clear"; font.pixelSize: 38 * 0.45; color: "#111" }
+                            MouseArea {
+                                anchors.fill: parent
+                                onClicked: {
+                                    substrateField.text = ""
+                                    conductorField.text = ""
+                                    frequencyField.text = ""
+                                    bandwidthField.text = ""
+                                    antennaFamilyField.text = ""
+                                    chatInputField.text = ""
+                                    chatModel.clear()
+                                    patchWidthValue.text = ""
+                                    patchLengthValue.text = ""
+                                    substrateWidthValue.text = ""
+                                    substrateLengthValue.text = ""
+                                    feedWidthValue.text = ""
+                                    feedLengthValue.text = ""
+                                    actualFrequencyValue.text = ""
+                                    actualBandwidthValue.text = ""
+                                    farfieldValue.text = ""
+                                    gainValue.text = ""
+                                    vswrValue.text = ""
+                                    designController.clearDesign()
+                                }
+                            }
+                        }
+
+                        Text {
+                            x: 20
+                            y: 246
+                            text: root.statusText
+                            font.pixelSize: 18 * 0.45
+                            color: "#333"
+                        }
+                    }
+                }
             }
         }
 
