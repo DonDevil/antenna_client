@@ -489,6 +489,9 @@ End With
         kind = parameters["kind"]
         if kind == "conductor":
             conductivity = parameters.get("conductivity_s_per_m", 5.8e7)
+            color = parameters.get("color_rgb", [1, 1, 0])
+            if not isinstance(color, (list, tuple)) or len(color) != 3:
+                color = [1, 1, 0]
             return f"""
 With Material
     .Reset
@@ -497,6 +500,9 @@ With Material
     .FrqType \"all\"
     .Type \"Lossy metal\"
     .Sigma \"{conductivity}\"
+    .Colour \"{color[0]}\", \"{color[1]}\", \"{color[2]}\"
+    .Wireframe \"False\"
+    .Transparency \"0\"
     .Create
 End With
 """.strip()

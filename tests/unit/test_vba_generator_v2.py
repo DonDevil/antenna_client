@@ -117,3 +117,21 @@ def test_create_port_macro_allows_opt_in_extension_calculation() -> None:
     )
 
     assert 'CalculatePortExtensionCoefficient' in macro
+
+
+def test_define_conductor_material_sets_copper_color() -> None:
+    gen = VBAGenerator()
+
+    macro = gen.generate_macro(
+        "define_material",
+        {
+            "name": "Copper (annealed)",
+            "kind": "conductor",
+            "conductivity_s_per_m": 5.8e7,
+        },
+    )
+
+    assert 'With Material' in macro
+    assert '.Type "Lossy metal"' in macro
+    assert '.Sigma "58000000.0"' in macro
+    assert '.Colour "1", "1", "0"' in macro
