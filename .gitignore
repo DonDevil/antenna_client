@@ -73,6 +73,15 @@ temp/
 # Generated reports
 artifacts/reports/
 
+# Generated CST runtime artifacts (do not commit)
+artifacts/exports/
+artifacts/vba/
+artifacts/iface_named_project/
+artifacts/message_test/
+
+# Runtime checkpoints
+test_checkpoints/
+
 # Environment variables
 .env
 .env.local

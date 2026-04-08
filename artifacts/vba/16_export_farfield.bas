@@ -1,1 +1,0 @@
-' export_farfield format=json frequency_ghz=2.4 destination_hint=farfield

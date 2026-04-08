@@ -1,1 +1,0 @@
-' extract_summary_metrics metrics=center_frequency_ghz, bandwidth_mhz, return_loss_db, vswr, gain_dbi

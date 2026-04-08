@@ -1,7 +1,0 @@
-{
-  "requested_frequency_ghz": 2.4,
-  "selected_tree_item": "Farfields\\ff_2p4 [1]",
-  "export_path": "E:\\antenna_client\\artifacts\\exports\\farfield_verify_full_3.txt",
-  "summary_export_path": "E:\\antenna_client\\artifacts\\exports\\farfield_verify_full_3_summary.txt",
-  "theta_cut_export_path": "E:\\antenna_client\\artifacts\\exports\\farfield_verify_full_3_theta_cut.txt"
-}
