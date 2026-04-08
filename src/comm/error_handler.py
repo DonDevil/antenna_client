@@ -20,6 +20,7 @@ class ErrorCode(str, Enum):
     FAMILY_PROFILE_CONSTRAINT_FAILED = "FAMILY_PROFILE_CONSTRAINT_FAILED"
     INVALID_INTENT_REQUEST = "INVALID_INTENT_REQUEST"
     INVALID_CHAT_REQUEST = "INVALID_CHAT_REQUEST"
+    V2_COMMAND_VALIDATION_FAILED = "V2_COMMAND_VALIDATION_FAILED"
     
     # Session/feedback errors
     SESSION_NOT_FOUND = "SESSION_NOT_FOUND"
@@ -65,6 +66,12 @@ class ErrorHandler:
             "Please try again with a different message.",
             True,
             "retry_chat"
+        ),
+        ErrorCode.V2_COMMAND_VALIDATION_FAILED: (
+            "The server rejected the CST command package before execution. "
+            "Please review the command contract details and retry.",
+            True,
+            "review_server_command_package"
         ),
         ErrorCode.SESSION_NOT_FOUND: (
             "The design session was not found on the server. "
@@ -124,9 +131,24 @@ class ErrorHandler:
                 recoverable = True
                 action = "check_server_status"
             
+            details = error_data.get("details") if isinstance(error_data.get("details"), dict) else None
+
             # Append server details if available
             if server_message and server_message not in user_msg:
                 user_msg = f"{user_msg}\n\nDetails: {server_message}"
+            if details:
+                command_name = details.get("command_name")
+                command_index = details.get("command_index")
+                invalid_fields = details.get("invalid_fields")
+                detail_parts = []
+                if command_index is not None:
+                    detail_parts.append(f"command_index={command_index}")
+                if command_name:
+                    detail_parts.append(f"command_name={command_name}")
+                if invalid_fields:
+                    detail_parts.append(f"invalid_fields={invalid_fields}")
+                if detail_parts:
+                    user_msg = f"{user_msg}\n\nValidation details: " + ", ".join(detail_parts)
             
             logger.warning(
                 f"Error {error_code}: recoverable={recoverable}, action={action}"
@@ -158,6 +180,7 @@ class ErrorHandler:
             ErrorCode.SCHEMA_VALIDATION_FAILED,
             ErrorCode.INVALID_INTENT_REQUEST,
             ErrorCode.INVALID_CHAT_REQUEST,
+            ErrorCode.V2_COMMAND_VALIDATION_FAILED,
             ErrorCode.FEEDBACK_PROCESSING_FAILED,
             ErrorCode.LOW_SURROGATE_CONFIDENCE,
         ]

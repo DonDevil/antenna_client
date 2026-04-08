@@ -517,23 +517,23 @@ End With
 
     def _create_substrate(self, parameters: Dict[str, Any]) -> str:
         origin = parameters["origin_mm"]
-        x_min, x_max = self._centered_bounds(origin["x"], parameters["length_mm"])
-        y_min, y_max = self._centered_bounds(origin["y"], parameters["width_mm"])
+        x_min, x_max = self._centered_bounds(origin["x"], parameters["width_mm"])
+        y_min, y_max = self._centered_bounds(origin["y"], parameters["length_mm"])
         z_min = origin["z"]
         z_max = self._expr_binary(origin["z"], "+", parameters["height_mm"])
         return self._brick(parameters["name"], self._component_name(parameters), parameters["material"], x_min, x_max, y_min, y_max, z_min, z_max)
 
     def _create_ground_plane(self, parameters: Dict[str, Any]) -> str:
-        x_min, x_max = self._centered_bounds(0, parameters["length_mm"])
-        y_min, y_max = self._centered_bounds(0, parameters["width_mm"])
+        x_min, x_max = self._centered_bounds(0, parameters["width_mm"])
+        y_min, y_max = self._centered_bounds(0, parameters["length_mm"])
         z_min = parameters["z_mm"]
         z_max = self._expr_binary(parameters["z_mm"], "+", parameters["thickness_mm"])
         return self._brick(parameters["name"], self._component_name(parameters), parameters["material"], x_min, x_max, y_min, y_max, z_min, z_max)
 
     def _create_patch(self, parameters: Dict[str, Any]) -> str:
         center = parameters["center_mm"]
-        x_min, x_max = self._centered_bounds(center["x"], parameters["length_mm"])
-        y_min, y_max = self._centered_bounds(center["y"], parameters["width_mm"])
+        x_min, x_max = self._centered_bounds(center["x"], parameters["width_mm"])
+        y_min, y_max = self._centered_bounds(center["y"], parameters["length_mm"])
         z_min = center["z"]
         z_max = self._expr_binary(center["z"], "+", parameters["thickness_mm"])
         return self._brick(parameters["name"], self._component_name(parameters), parameters["material"], x_min, x_max, y_min, y_max, z_min, z_max)
@@ -542,10 +542,21 @@ End With
         start = parameters["start_mm"]
         end = parameters["end_mm"]
         half_width = self._expr_binary(parameters["width_mm"], "/", 2)
-        x_min = self._expr_binary(min(start["x"], end["x"]), "-", half_width)
-        x_max = self._expr_binary(max(start["x"], end["x"]), "+", half_width)
-        y_min = self._expr_binary(min(start["y"], end["y"]), "-", half_width)
-        y_max = self._expr_binary(max(start["y"], end["y"]), "+", half_width)
+        if start["x"] == end["x"] and start["y"] != end["y"]:
+            x_min = self._expr_binary(start["x"], "-", half_width)
+            x_max = self._expr_binary(start["x"], "+", half_width)
+            y_min = min(start["y"], end["y"])
+            y_max = max(start["y"], end["y"])
+        elif start["y"] == end["y"] and start["x"] != end["x"]:
+            x_min = min(start["x"], end["x"])
+            x_max = max(start["x"], end["x"])
+            y_min = self._expr_binary(start["y"], "-", half_width)
+            y_max = self._expr_binary(start["y"], "+", half_width)
+        else:
+            x_min = self._expr_binary(min(start["x"], end["x"]), "-", half_width)
+            x_max = self._expr_binary(max(start["x"], end["x"]), "+", half_width)
+            y_min = self._expr_binary(min(start["y"], end["y"]), "-", half_width)
+            y_max = self._expr_binary(max(start["y"], end["y"]), "+", half_width)
         z_min = start["z"]
         z_max = self._expr_binary(start["z"], "+", parameters["thickness_mm"])
         return self._brick(parameters["name"], self._component_name(parameters), parameters["material"], x_min, x_max, y_min, y_max, z_min, z_max)
@@ -555,7 +566,7 @@ End With
         if p1 is None:
             raise ValueError("create_port requires p1_mm or reference_mm")
         p2 = parameters.get("p2_mm") or {"x": p1["x"], "y": p1["y"], "z": p1["z"] + 1.0}
-        return f"""
+        macro = f"""
 With DiscretePort
     .Reset
     .PortNumber \"{parameters['port_id']}\"
@@ -570,6 +581,15 @@ With DiscretePort
     .Create
 End With
 """.strip()
+        if parameters.get("calculate_port_extension", False):
+            macro += f"""
+
+With Port
+    .PortNumber \"{parameters['port_id']}\"
+    .CalculatePortExtensionCoefficient
+End With
+""".rstrip()
+        return macro
 
     def _set_boundary(self, parameters: Dict[str, Any]) -> str:
         raw_boundary = str(parameters["boundary_type"]).strip().lower()

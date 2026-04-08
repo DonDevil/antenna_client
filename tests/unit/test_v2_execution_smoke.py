@@ -1,4 +1,4 @@
-import pytest
+import asyncio
 
 import executor.execution_engine as execution_engine_module
 from executor.command_parser import CommandParser
@@ -18,8 +18,7 @@ class FakeCSTApp:
         return True
 
 
-@pytest.mark.asyncio
-async def test_v2_package_exec_generates_expected_vba_files(monkeypatch, tmp_path):
+def test_v2_package_exec_generates_expected_vba_files(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(execution_engine_module, "CSTApp", FakeCSTApp)
 
@@ -93,7 +92,7 @@ async def test_v2_package_exec_generates_expected_vba_files(monkeypatch, tmp_pat
     assert parser.validate_package(package) is True
 
     engine = execution_engine_module.ExecutionEngine()
-    results = await engine.execute_command_package(package)
+    results = asyncio.run(engine.execute_command_package(package))
 
     assert len(results) == 9
     assert all(result.success for result in results)

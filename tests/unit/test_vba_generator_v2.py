@@ -78,6 +78,42 @@ def test_create_patch_preserves_component_and_parameter_expressions() -> None:
     )
 
     assert '.Component "antenna"' in macro
-    assert '.Xrange "(0.0)-((px)/(2.0))", "(0.0)+((px)/(2.0))"' in macro
-    assert '.Yrange "(0.0)-((py)/(2.0))", "(0.0)+((py)/(2.0))"' in macro
+    assert '.Xrange "(0.0)-((py)/(2.0))", "(0.0)+((py)/(2.0))"' in macro
+    assert '.Yrange "(0.0)-((px)/(2.0))", "(0.0)+((px)/(2.0))"' in macro
     assert '.Zrange "h_sub", "(h_sub)+(t_cu)"' in macro
+
+
+def test_create_port_macro_does_not_calculate_extension_by_default() -> None:
+    gen = VBAGenerator()
+
+    macro = gen.generate_macro(
+        "create_port",
+        {
+            "port_id": 1,
+            "impedance_ohm": 50.0,
+            "p1_mm": {"x": 0.0, "y": -20.0, "z": 1.6},
+            "p2_mm": {"x": 0.0, "y": -20.0, "z": 0.035},
+        },
+    )
+
+    assert 'With DiscretePort' in macro
+    assert '.SetP1 "False", "0.0", "-20.0", "1.6"' in macro
+    assert '.SetP2 "False", "0.0", "-20.0", "0.035"' in macro
+    assert 'CalculatePortExtensionCoefficient' not in macro
+
+
+def test_create_port_macro_allows_opt_in_extension_calculation() -> None:
+    gen = VBAGenerator()
+
+    macro = gen.generate_macro(
+        "create_port",
+        {
+            "port_id": 1,
+            "impedance_ohm": 50.0,
+            "p1_mm": {"x": 0.0, "y": -20.0, "z": 1.6},
+            "p2_mm": {"x": 0.0, "y": -20.0, "z": 0.035},
+            "calculate_port_extension": True,
+        },
+    )
+
+    assert 'CalculatePortExtensionCoefficient' in macro

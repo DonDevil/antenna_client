@@ -8,9 +8,10 @@ Responsible for:
 - Timeout and retry logic
 """
 
-import httpx
-from typing import Optional, Dict, Any
 import asyncio
+from typing import Optional, Dict, Any
+
+import httpx
 from utils.logger import get_logger
 
 
@@ -108,10 +109,30 @@ class ServerConnector:
                 response = await self.client.request(method, url, **kwargs)
                 response.raise_for_status()
                 return response.json()
+            except httpx.HTTPStatusError as e:
+                last_error = e
+                status_code = e.response.status_code
+                response_text = e.response.text
+                try:
+                    response_json = e.response.json()
+                except Exception:
+                    response_json = None
+
+                logger.warning(
+                    f"Request failed (attempt {attempt + 1}/{self.retry_count}): "
+                    f"HTTPStatusError - {status_code} - {response_json or response_text or str(e)}"
+                )
+
+                if 400 <= status_code < 500:
+                    raise
+
+                if attempt < self.retry_count - 1:
+                    wait_time = self.retry_backoff ** attempt
+                    logger.info(f"Retrying in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
             except Exception as e:
                 last_error = e
                 
-                # Better error logging
                 error_type = type(e).__name__
                 error_msg = str(e) if str(e) else "Unknown error"
                 logger.warning(

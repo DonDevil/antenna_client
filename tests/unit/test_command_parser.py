@@ -134,9 +134,22 @@ def test_v2_validation_accepts_parameter_commands() -> None:
     payload = _base_package("cst_command_package.v2")
     payload["commands"] = [
         {"seq": 1, "command": "define_parameter", "params": {"name": "px", "value": 37}},
-        {"seq": 2, "command": "update_parameter", "params": {"name": "px", "value": 41.5}},
+        {"seq": 2, "command": "set_parameter", "params": {"name": "px", "value": "px+1.5"}},
         {"seq": 3, "command": "rebuild_model", "params": {}},
     ]
 
     package = parser.parse_package(payload)
     assert parser.validate_package(package) is True
+
+
+def test_v2_validation_requires_rebuild_after_parameter_updates() -> None:
+    parser = CommandParser()
+    payload = _base_package("cst_command_package.v2")
+    payload["commands"] = [
+        {"seq": 1, "command": "update_parameter", "params": {"name": "px", "value": 41.5}},
+        {"seq": 2, "command": "run_simulation", "params": {"timeout_sec": 120}},
+    ]
+
+    package = parser.parse_package(payload)
+    with pytest.raises(ValueError, match="rebuild_model"):
+        parser.validate_package(package)

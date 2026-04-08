@@ -126,7 +126,7 @@ class CommandParser:
                 raise ValueError(f"Command {cmd.seq} has invalid params payload")
 
         if package.schema_version == "cst_command_package.v2":
-            self._v2_contract_validator.validate_commands(package.commands)
+            self._v2_contract_validator.validate_package(package.model_dump())
         
         logger.info(f"Package validation successful: {len(package.commands)} commands valid")
         return True

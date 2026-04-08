@@ -999,8 +999,8 @@ class ChatMessageHandler:
             lines.append("Predicted Dimensions:")
             lines.append(f"  Patch:      {dims.patch_length_mm:.2f} × {dims.patch_width_mm:.2f} mm  (h={dims.patch_height_mm:.4f} mm)")
             lines.append(f"  Substrate:  {dims.substrate_length_mm:.2f} × {dims.substrate_width_mm:.2f} mm  (h={dims.substrate_height_mm:.3f} mm)")
-            lines.append(f"  Feed line:  {dims.feed_length_mm:.2f} mm long × {dims.feed_width_mm:.3f} mm wide")
-            lines.append(f"  Feed offset: ({dims.feed_offset_x_mm:.4f}, {dims.feed_offset_y_mm:.4f}) mm")
+            lines.append(f"  Feed line:  {dims.feed_width_mm:.3f} mm wide (edge-fed span is derived client-side)")
+            lines.append(f"  Feed anchor: ({dims.feed_offset_x_mm:.4f}, {dims.feed_offset_y_mm:.4f}) mm")
         else:
             lines.append("Design accepted by server.")
 

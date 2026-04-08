@@ -53,6 +53,7 @@ class ExecutionEngine:
         self.dry_run = True
         self.artifacts: Dict[str, Any] = {}
         self._scoped_hint_cache: Dict[str, str] = {}
+        self._geometry_context: Dict[str, Dict[str, Any]] = {}
         logger.info("ExecutionEngine initialized")
     
     async def execute_command_package(self, package: CommandPackage) -> List[ExecutionResult]:
@@ -75,6 +76,7 @@ class ExecutionEngine:
             "iteration_index": int(package.iteration_index),
         }
         self._scoped_hint_cache = {}
+        self._geometry_context = {}
         self.dry_run = not self.cst_app.connect()
         logger.info(f"Starting execution of package with {len(package.commands)} commands")
         
@@ -137,6 +139,351 @@ class ExecutionEngine:
             self.artifacts[key] = str(Path(path_value).resolve())
         except Exception:
             self.artifacts[key] = str(path_value)
+
+    @staticmethod
+    def _as_float(value: Any) -> float | None:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _as_expr(value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text if text else None
+
+    @staticmethod
+    def _extract_center_expr(min_expr: str, max_expr: str) -> str | None:
+        # Typical CST symbolic bounds: center-(span/2), center+(span/2)
+        left = re.match(r"^\s*(.+?)\s*-\s*\(.+\)\s*$", min_expr)
+        right = re.match(r"^\s*(.+?)\s*\+\s*\(.+\)\s*$", max_expr)
+        if left and right:
+            c_left = left.group(1).strip()
+            c_right = right.group(1).strip()
+            if c_left == c_right:
+                return c_left
+        return None
+
+    def _remember_geometry(self, command_name: str, params: Dict[str, Any]) -> None:
+        if command_name == "create_substrate":
+            self._geometry_context["substrate"] = dict(params)
+        elif command_name == "create_ground_plane":
+            self._geometry_context["ground"] = dict(params)
+        elif command_name == "create_patch":
+            self._geometry_context["patch"] = dict(params)
+        elif command_name == "create_feedline":
+            self._geometry_context["feed"] = dict(params)
+        elif command_name == "define_brick":
+            name = str(params.get("name", "")).strip().lower()
+            if "substrate" in name:
+                self._geometry_context["substrate"] = dict(params)
+            elif "ground" in name:
+                self._geometry_context["ground"] = dict(params)
+            elif "patch" in name:
+                self._geometry_context["patch"] = dict(params)
+            elif "feed" in name:
+                self._geometry_context["feed"] = dict(params)
+
+    def _get_y_bounds(self, geom: Dict[str, Any] | None) -> tuple[float, float] | None:
+        if not geom:
+            return None
+        yrange = geom.get("yrange")
+        if isinstance(yrange, (list, tuple)) and len(yrange) >= 2:
+            y0 = self._as_float(yrange[0])
+            y1 = self._as_float(yrange[1])
+            if y0 is not None and y1 is not None:
+                return (min(y0, y1), max(y0, y1))
+
+        start = geom.get("start_mm") or {}
+        end = geom.get("end_mm") or {}
+        y0 = self._as_float(start.get("y"))
+        y1 = self._as_float(end.get("y"))
+        if y0 is not None and y1 is not None:
+            return (min(y0, y1), max(y0, y1))
+        if y0 is not None:
+            return (y0, y0)
+        if y1 is not None:
+            return (y1, y1)
+
+        center = geom.get("center_mm") or geom.get("origin_mm") or {}
+        center_y = self._as_float(center.get("y"))
+        length = self._as_float(geom.get("length_mm"))
+        if center_y is not None and length is not None:
+            half = length / 2.0
+            return (center_y - half, center_y + half)
+        return None
+
+    def _get_y_bounds_expr(self, geom: Dict[str, Any] | None) -> tuple[str, str] | None:
+        if not geom:
+            return None
+        yrange = geom.get("yrange")
+        if isinstance(yrange, (list, tuple)) and len(yrange) >= 2:
+            y0 = self._as_expr(yrange[0])
+            y1 = self._as_expr(yrange[1])
+            if y0 is not None and y1 is not None:
+                return (y0, y1)
+
+        start = geom.get("start_mm") or {}
+        end = geom.get("end_mm") or {}
+        y0 = self._as_expr(start.get("y"))
+        y1 = self._as_expr(end.get("y"))
+        if y0 is not None and y1 is not None:
+            return (y0, y1)
+        if y0 is not None:
+            return (y0, y0)
+        if y1 is not None:
+            return (y1, y1)
+        return None
+
+    def _get_x_center(self, geom: Dict[str, Any] | None) -> float | None:
+        if not geom:
+            return None
+        xrange = geom.get("xrange")
+        if isinstance(xrange, (list, tuple)) and len(xrange) >= 2:
+            x0 = self._as_float(xrange[0])
+            x1 = self._as_float(xrange[1])
+            if x0 is not None and x1 is not None:
+                return (x0 + x1) / 2.0
+
+        start = geom.get("start_mm") or {}
+        end = geom.get("end_mm") or {}
+        x0 = self._as_float(start.get("x"))
+        x1 = self._as_float(end.get("x"))
+        if x0 is not None and x1 is not None:
+            return (x0 + x1) / 2.0
+        if x0 is not None:
+            return x0
+        if x1 is not None:
+            return x1
+
+        center = geom.get("center_mm") or geom.get("origin_mm") or {}
+        return self._as_float(center.get("x"))
+
+    def _get_x_center_expr(self, geom: Dict[str, Any] | None) -> str | None:
+        if not geom:
+            return None
+        xrange = geom.get("xrange")
+        if isinstance(xrange, (list, tuple)) and len(xrange) >= 2:
+            x0n = self._as_float(xrange[0])
+            x1n = self._as_float(xrange[1])
+            if x0n is not None and x1n is not None:
+                return str((x0n + x1n) / 2.0)
+            x0 = self._as_expr(xrange[0])
+            x1 = self._as_expr(xrange[1])
+            if x0 and x1:
+                center_expr = self._extract_center_expr(x0, x1)
+                if center_expr:
+                    return center_expr
+
+        start = geom.get("start_mm") or {}
+        end = geom.get("end_mm") or {}
+        x0 = self._as_expr(start.get("x"))
+        x1 = self._as_expr(end.get("x"))
+        if x0 and x1:
+            if x0 == x1:
+                return x0
+            x0n = self._as_float(x0)
+            x1n = self._as_float(x1)
+            if x0n is not None and x1n is not None:
+                return str((x0n + x1n) / 2.0)
+        if x0:
+            return x0
+        if x1:
+            return x1
+
+        center = geom.get("center_mm") or geom.get("origin_mm") or {}
+        return self._as_expr(center.get("x"))
+
+    def _get_z_min(self, geom: Dict[str, Any] | None) -> float | None:
+        if not geom:
+            return None
+        zrange = geom.get("zrange")
+        if isinstance(zrange, (list, tuple)) and len(zrange) >= 2:
+            z0 = self._as_float(zrange[0])
+            z1 = self._as_float(zrange[1])
+            if z0 is not None and z1 is not None:
+                return min(z0, z1)
+
+        start = geom.get("start_mm") or {}
+        end = geom.get("end_mm") or {}
+        z0 = self._as_float(start.get("z"))
+        z1 = self._as_float(end.get("z"))
+        if z0 is not None and z1 is not None:
+            return min(z0, z1)
+        if z0 is not None:
+            return z0
+        if z1 is not None:
+            return z1
+
+        center = geom.get("center_mm") or geom.get("origin_mm") or {}
+        return self._as_float(center.get("z"))
+
+    def _get_ground_top_z(self, geom: Dict[str, Any] | None) -> float | None:
+        if not geom:
+            return None
+        zrange = geom.get("zrange")
+        if isinstance(zrange, (list, tuple)) and len(zrange) >= 2:
+            z0 = self._as_float(zrange[0])
+            z1 = self._as_float(zrange[1])
+            if z0 is not None and z1 is not None:
+                return max(z0, z1)
+
+        z_base = self._as_float(geom.get("z_mm"))
+        thickness = self._as_float(geom.get("thickness_mm"))
+        if z_base is not None and thickness is not None:
+            return z_base + thickness
+        return None
+
+    def _get_z_min_expr(self, geom: Dict[str, Any] | None) -> str | None:
+        if not geom:
+            return None
+        zrange = geom.get("zrange")
+        if isinstance(zrange, (list, tuple)) and len(zrange) >= 2:
+            z0 = self._as_expr(zrange[0])
+            z1 = self._as_expr(zrange[1])
+            if z0 and z1:
+                z0n = self._as_float(z0)
+                z1n = self._as_float(z1)
+                if z0n is not None and z1n is not None:
+                    return str(min(z0n, z1n))
+                return z0
+
+        start = geom.get("start_mm") or {}
+        end = geom.get("end_mm") or {}
+        z0 = self._as_expr(start.get("z"))
+        z1 = self._as_expr(end.get("z"))
+        if z0 and z1:
+            if z0 == z1:
+                return z0
+            z0n = self._as_float(z0)
+            z1n = self._as_float(z1)
+            if z0n is not None and z1n is not None:
+                return str(min(z0n, z1n))
+            return z0
+        if z0:
+            return z0
+        if z1:
+            return z1
+        return None
+
+    def _get_ground_top_z_expr(self, geom: Dict[str, Any] | None) -> str | None:
+        if not geom:
+            return None
+        zrange = geom.get("zrange")
+        if isinstance(zrange, (list, tuple)) and len(zrange) >= 2:
+            z0 = self._as_expr(zrange[0])
+            z1 = self._as_expr(zrange[1])
+            if z0 and z1:
+                z0n = self._as_float(z0)
+                z1n = self._as_float(z1)
+                if z0n is not None and z1n is not None:
+                    return str(max(z0n, z1n))
+                return z1
+
+        z_base = self._as_float(geom.get("z_mm"))
+        thickness = self._as_float(geom.get("thickness_mm"))
+        if z_base is not None and thickness is not None:
+            return str(z_base + thickness)
+        return None
+
+    def _derive_feed_brick_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        derived = dict(params)
+        patch_bounds = self._get_y_bounds(self._geometry_context.get("patch"))
+        substrate_bounds = self._get_y_bounds(self._geometry_context.get("substrate"))
+        yrange = derived.get("yrange")
+        if not isinstance(yrange, (list, tuple)) or len(yrange) < 2:
+            return derived
+
+        if patch_bounds and substrate_bounds:
+            patch_y_min = patch_bounds[0]
+            substrate_y_min = substrate_bounds[0]
+            if substrate_y_min < patch_y_min:
+                derived["yrange"] = [substrate_y_min, patch_y_min]
+                return derived
+
+        patch_expr = self._get_y_bounds_expr(self._geometry_context.get("patch"))
+        substrate_expr = self._get_y_bounds_expr(self._geometry_context.get("substrate"))
+        if patch_expr and substrate_expr:
+            derived["yrange"] = [substrate_expr[0], patch_expr[0]]
+            return derived
+
+        return derived
+
+    def _derive_feedline_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        derived = dict(params)
+        patch = self._geometry_context.get("patch")
+        substrate = self._geometry_context.get("substrate")
+        if not patch or not substrate:
+            return derived
+
+        patch_center = patch.get("center_mm") or {}
+        substrate_origin = substrate.get("origin_mm") or {}
+        patch_center_y = self._as_float(patch_center.get("y"))
+        patch_center_z = self._as_float(patch_center.get("z"))
+        substrate_center_y = self._as_float(substrate_origin.get("y"))
+        patch_length = self._as_float(patch.get("length_mm"))
+        substrate_length = self._as_float(substrate.get("length_mm"))
+        if None in {patch_center_y, patch_center_z, substrate_center_y, patch_length, substrate_length}:
+            return derived
+
+        start = params.get("start_mm") or {}
+        end = params.get("end_mm") or {}
+        feed_x = self._as_float(start.get("x"))
+        if feed_x is None:
+            feed_x = self._as_float(end.get("x"))
+        if feed_x is None:
+            feed_x = 0.0
+
+        feed_z = self._as_float(start.get("z"))
+        if feed_z is None:
+            feed_z = self._as_float(end.get("z"))
+        if feed_z is None:
+            feed_z = patch_center_z
+        if feed_z is None:
+            return derived
+
+        y_start = patch_center_y - (patch_length / 2.0)
+        y_end = substrate_center_y - (substrate_length / 2.0)
+        derived["start_mm"] = {"x": feed_x, "y": y_start, "z": feed_z}
+        derived["end_mm"] = {"x": feed_x, "y": y_end, "z": feed_z}
+        derived["length_mm"] = abs(y_end - y_start)
+        return derived
+
+    def _derive_port_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        derived = dict(params)
+        if derived.get("p1_mm") and derived.get("p2_mm"):
+            derived.setdefault("calculate_port_extension", False)
+            return derived
+
+        feed = self._geometry_context.get("feed")
+        ground = self._geometry_context.get("ground")
+        if not feed or not ground:
+            return derived
+
+        feed_bounds = self._get_y_bounds(feed)
+        x_val = self._get_x_center(feed)
+        feed_z = self._get_z_min(feed)
+        ground_top_z = self._get_ground_top_z(ground)
+
+        if feed_bounds and None not in {x_val, feed_z, ground_top_z}:
+            port_y = feed_bounds[0]
+            derived["p1_mm"] = {"x": x_val, "y": port_y, "z": feed_z}
+            derived["p2_mm"] = {"x": x_val, "y": port_y, "z": ground_top_z}
+            derived.setdefault("calculate_port_extension", False)
+            return derived
+
+        feed_bounds_expr = self._get_y_bounds_expr(feed)
+        x_expr = self._get_x_center_expr(feed)
+        feed_z_expr = self._get_z_min_expr(feed)
+        ground_top_expr = self._get_ground_top_z_expr(ground)
+        if feed_bounds_expr and x_expr and feed_z_expr and ground_top_expr:
+            port_y = feed_bounds_expr[0]
+            derived["p1_mm"] = {"x": x_expr, "y": port_y, "z": feed_z_expr}
+            derived["p2_mm"] = {"x": x_expr, "y": port_y, "z": ground_top_expr}
+            derived.setdefault("calculate_port_extension", False)
+        return derived
 
     async def _execute_command(self, command: Command, package: CommandPackage) -> ExecutionResult:
         """Execute single command
@@ -369,8 +716,18 @@ class ExecutionEngine:
                     macro="",
                 )
 
-            # Generate VBA for command
-            vba_code = self.vba_generator.generate_macro(command.command, command.params)
+            # Generate VBA for command, applying client-side geometry fixes for legacy convenience commands.
+            macro_params = dict(command.params)
+            if command.command == "create_feedline":
+                macro_params = self._derive_feedline_params(macro_params)
+            elif command.command == "define_brick":
+                name = str(macro_params.get("name", "")).strip().lower()
+                if "feed" in name:
+                    macro_params = self._derive_feed_brick_params(macro_params)
+            elif command.command == "create_port":
+                macro_params = self._derive_port_params(macro_params)
+
+            vba_code = self.vba_generator.generate_macro(command.command, macro_params)
 
             artifacts_dir = Path("artifacts") / "vba"
             artifacts_dir.mkdir(parents=True, exist_ok=True)
@@ -396,6 +753,7 @@ class ExecutionEngine:
                 output=f"{mode.capitalize()} {command.command} successfully",
                 macro=vba_code,
             )
+            self._remember_geometry(command.command, macro_params)
             logger.debug(f"Command {command.seq}:{command.command} execution successful")
             return result
         except Exception as e:
