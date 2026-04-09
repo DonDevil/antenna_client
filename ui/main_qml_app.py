@@ -832,6 +832,17 @@ class DesignController(QObject):
     def _build_design_specs(self) -> dict[str, Any]:
         family = self._normalize_antenna_family(self.current_design.get("antenna_family"))
         defaults = FAMILY_QUALIFIER_DEFAULTS.get(family or "", FAMILY_QUALIFIER_DEFAULTS["amc_patch"])
+        conductor_material = self.current_design.get("conductor_material") or self.current_design.get("conductor_name")
+        substrate_material = self.current_design.get("substrate_material") or self.current_design.get("substrate_name")
+
+        allowed_materials = self.current_design.get("allowed_materials")
+        if not isinstance(allowed_materials, list) or not allowed_materials:
+            allowed_materials = [str(conductor_material)] if isinstance(conductor_material, str) and conductor_material.strip() else None
+
+        allowed_substrates = self.current_design.get("allowed_substrates")
+        if not isinstance(allowed_substrates, list) or not allowed_substrates:
+            allowed_substrates = [str(substrate_material)] if isinstance(substrate_material, str) and substrate_material.strip() else None
+
         return {
             "antenna_family": family,
             "patch_shape": str(self.current_design.get("patch_shape") or defaults["patch_shape"]),
@@ -839,6 +850,10 @@ class DesignController(QObject):
             "polarization": str(self.current_design.get("polarization") or defaults["polarization"]),
             "frequency_ghz": float(self.current_design.get("frequency_ghz") or 2.45),
             "bandwidth_mhz": float(self.current_design.get("bandwidth_mhz") or 100.0),
+            "conductor_material": str(conductor_material).strip() if isinstance(conductor_material, str) and conductor_material.strip() else None,
+            "substrate_material": str(substrate_material).strip() if isinstance(substrate_material, str) and substrate_material.strip() else None,
+            "allowed_materials": [str(item).strip() for item in allowed_materials if isinstance(item, str) and item.strip()] if allowed_materials else None,
+            "allowed_substrates": [str(item).strip() for item in allowed_substrates if isinstance(item, str) and item.strip()] if allowed_substrates else None,
             "constraints": {
                 "max_vswr": float(self.current_design.get("max_vswr") or 2.0),
                 "target_gain_dbi": float(self.current_design.get("target_gain_dbi") or 0.0),

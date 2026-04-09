@@ -17,6 +17,352 @@ class VBAGenerator:
     DEFAULT_COMPONENT = "component1"
 
     @staticmethod
+    def _material_key(raw_name: str) -> str:
+        text = str(raw_name or "").strip().lower()
+        text = text.replace("_", " ")
+        # Normalize common naming variations used by server/CST/UI payloads.
+        text = text.replace("/", "-")
+        text = re.sub(r"\(lossy\)", "", text)
+        text = re.sub(r"[^a-z0-9]+", " ", text)
+        return " ".join(text.split())
+
+    def _material_preset_macro(self, raw_name: str, sanitized_name: str) -> str | None:
+        key = self._material_key(raw_name)
+
+        if key == "gold":
+            return f"""
+With Material
+    .Reset
+    .Name \"{sanitized_name}\"
+    .Folder \"\"
+    .FrqType \"static\"
+    .Type \"Normal\"
+    .SetMaterialUnit \"Hz\", \"mm\"
+    .Epsilon \"1\"
+    .Mu \"1.0\"
+    .Kappa \"4.561e+007\"
+    .TanD \"0.0\"
+    .TanDFreq \"0.0\"
+    .TanDGiven \"False\"
+    .TanDModel \"ConstTanD\"
+    .KappaM \"0\"
+    .TanDM \"0.0\"
+    .TanDMFreq \"0.0\"
+    .TanDMGiven \"False\"
+    .TanDMModel \"ConstTanD\"
+    .DispModelEps \"None\"
+    .DispModelMu \"None\"
+    .DispersiveFittingSchemeEps \"General 1st\"
+    .DispersiveFittingSchemeMu \"General 1st\"
+    .UseGeneralDispersionEps \"False\"
+    .UseGeneralDispersionMu \"False\"
+    .FrqType \"all\"
+    .Type \"Lossy metal\"
+    .MaterialUnit \"Frequency\", \"GHz\"
+    .MaterialUnit \"Geometry\", \"mm\"
+    .MaterialUnit \"Time\", \"s\"
+    .MaterialUnit \"Temperature\", \"Kelvin\"
+    .Mu \"1.0\"
+    .Sigma \"4.561e+007\"
+    .Rho \"19320.0\"
+    .ThermalType \"Normal\"
+    .ThermalConductivity \"314.0\"
+    .SpecificHeat \"130\", \"J/K/kg\"
+    .MetabolicRate \"0\"
+    .BloodFlow \"0\"
+    .VoxelConvection \"0\"
+    .MechanicsType \"Isotropic\"
+    .YoungsModulus \"78\"
+    .PoissonsRatio \"0.42\"
+    .ThermalExpansionRate \"14\"
+    .ReferenceCoordSystem \"Global\"
+    .CoordSystemType \"Cartesian\"
+    .NLAnisotropy \"False\"
+    .NLAStackingFactor \"1\"
+    .NLADirectionX \"1\"
+    .NLADirectionY \"0\"
+    .NLADirectionZ \"0\"
+    .Colour \"1\", \"1\", \"0\"
+    .Wireframe \"False\"
+    .Reflection \"False\"
+    .Allowoutline \"True\"
+    .Transparentoutline \"False\"
+    .Transparency \"0\"
+    .Create
+End With
+""".strip()
+
+        if key == "silver":
+            return f"""
+With Material
+    .Reset
+    .Name \"{sanitized_name}\"
+    .Folder \"\"
+    .FrqType \"static\"
+    .Type \"Normal\"
+    .SetMaterialUnit \"Hz\", \"mm\"
+    .Epsilon \"1\"
+    .Mu \"1.0\"
+    .Kappa \"6.3012e007\"
+    .TanD \"0.0\"
+    .TanDFreq \"0.0\"
+    .TanDGiven \"False\"
+    .TanDModel \"ConstTanD\"
+    .KappaM \"0\"
+    .TanDM \"0.0\"
+    .TanDMFreq \"0.0\"
+    .TanDMGiven \"False\"
+    .TanDMModel \"ConstTanD\"
+    .DispModelEps \"None\"
+    .DispModelMu \"None\"
+    .DispersiveFittingSchemeEps \"General 1st\"
+    .DispersiveFittingSchemeMu \"General 1st\"
+    .UseGeneralDispersionEps \"False\"
+    .UseGeneralDispersionMu \"False\"
+    .FrqType \"all\"
+    .Type \"Lossy metal\"
+    .MaterialUnit \"Frequency\", \"GHz\"
+    .MaterialUnit \"Geometry\", \"mm\"
+    .MaterialUnit \"Time\", \"s\"
+    .MaterialUnit \"Temperature\", \"Kelvin\"
+    .Mu \"1.0\"
+    .Sigma \"6.3012e007\"
+    .Rho \"10500.0\"
+    .ThermalType \"Normal\"
+    .ThermalConductivity \"429\"
+    .SpecificHeat \"230\", \"J/K/kg\"
+    .MetabolicRate \"0\"
+    .BloodFlow \"0\"
+    .VoxelConvection \"0\"
+    .MechanicsType \"Isotropic\"
+    .YoungsModulus \"76\"
+    .PoissonsRatio \"0.37\"
+    .ThermalExpansionRate \"20\"
+    .ReferenceCoordSystem \"Global\"
+    .CoordSystemType \"Cartesian\"
+    .NLAnisotropy \"False\"
+    .NLAStackingFactor \"1\"
+    .NLADirectionX \"1\"
+    .NLADirectionY \"0\"
+    .NLADirectionZ \"0\"
+    .Colour \"1\", \"1\", \"0\"
+    .Wireframe \"False\"
+    .Reflection \"False\"
+    .Allowoutline \"True\"
+    .Transparentoutline \"False\"
+    .Transparency \"0\"
+    .Create
+End With
+""".strip()
+
+        if key == "copper annealed":
+            return f"""
+With Material
+    .Reset
+    .Name \"{sanitized_name}\"
+    .Folder \"\"
+    .FrqType \"static\"
+    .Type \"Normal\"
+    .SetMaterialUnit \"Hz\", \"mm\"
+    .Epsilon \"1\"
+    .Mu \"1.0\"
+    .Kappa \"5.8e+007\"
+    .TanD \"0.0\"
+    .TanDFreq \"0.0\"
+    .TanDGiven \"False\"
+    .TanDModel \"ConstTanD\"
+    .KappaM \"0\"
+    .TanDM \"0.0\"
+    .TanDMFreq \"0.0\"
+    .TanDMGiven \"False\"
+    .TanDMModel \"ConstTanD\"
+    .DispModelEps \"None\"
+    .DispModelMu \"None\"
+    .DispersiveFittingSchemeEps \"Nth Order\"
+    .DispersiveFittingSchemeMu \"Nth Order\"
+    .UseGeneralDispersionEps \"False\"
+    .UseGeneralDispersionMu \"False\"
+    .FrqType \"all\"
+    .Type \"Lossy metal\"
+    .SetMaterialUnit \"GHz\", \"mm\"
+    .Mu \"1.0\"
+    .Kappa \"5.8e+007\"
+    .Rho \"8930.0\"
+    .ThermalType \"Normal\"
+    .ThermalConductivity \"401.0\"
+    .SpecificHeat \"390\", \"J/K/kg\"
+    .MetabolicRate \"0\"
+    .BloodFlow \"0\"
+    .VoxelConvection \"0\"
+    .MechanicsType \"Isotropic\"
+    .YoungsModulus \"120\"
+    .PoissonsRatio \"0.33\"
+    .ThermalExpansionRate \"17\"
+    .Colour \"1\", \"1\", \"0\"
+    .Wireframe \"False\"
+    .Reflection \"False\"
+    .Allowoutline \"True\"
+    .Transparentoutline \"False\"
+    .Transparency \"0\"
+    .Create
+End With
+""".strip()
+
+        if key == "fr 4":
+            return f"""
+With Material
+    .Reset
+    .Name \"{sanitized_name}\"
+    .Folder \"\"
+    .FrqType \"all\"
+    .Type \"Normal\"
+    .SetMaterialUnit \"GHz\", \"mm\"
+    .Epsilon \"4.3\"
+    .Mu \"1.0\"
+    .Kappa \"0.0\"
+    .TanD \"0.025\"
+    .TanDFreq \"10.0\"
+    .TanDGiven \"True\"
+    .TanDModel \"ConstTanD\"
+    .KappaM \"0.0\"
+    .TanDM \"0.0\"
+    .TanDMFreq \"0.0\"
+    .TanDMGiven \"False\"
+    .TanDMModel \"ConstKappa\"
+    .DispModelEps \"None\"
+    .DispModelMu \"None\"
+    .DispersiveFittingSchemeEps \"General 1st\"
+    .DispersiveFittingSchemeMu \"General 1st\"
+    .UseGeneralDispersionEps \"False\"
+    .UseGeneralDispersionMu \"False\"
+    .Rho \"0.0\"
+    .ThermalType \"Normal\"
+    .ThermalConductivity \"0.3\"
+    .SetActiveMaterial \"all\"
+    .Colour \"0.94\", \"0.82\", \"0.76\"
+    .Wireframe \"False\"
+    .Transparency \"0\"
+    .Create
+End With
+""".strip()
+
+        if key in {"rogers rt duroid 5880", "rogers rt duroid 5880 lossy", "rogers rt-duroid 5880"}:
+            return f"""
+With Material
+    .Reset
+    .Name \"{sanitized_name}\"
+    .Folder \"\"
+    .FrqType \"all\"
+    .Type \"Normal\"
+    .SetMaterialUnit \"GHz\", \"mm\"
+    .Epsilon \"2.2\"
+    .Mu \"1.0\"
+    .Kappa \"0.0\"
+    .TanD \"0.0009\"
+    .TanDFreq \"10.0\"
+    .TanDGiven \"True\"
+    .TanDModel \"ConstTanD\"
+    .KappaM \"0.0\"
+    .TanDM \"0.0\"
+    .TanDMFreq \"0.0\"
+    .TanDMGiven \"False\"
+    .TanDMModel \"ConstKappa\"
+    .DispModelEps \"None\"
+    .DispModelMu \"None\"
+    .DispersiveFittingSchemeEps \"General 1st\"
+    .DispersiveFittingSchemeMu \"General 1st\"
+    .UseGeneralDispersionEps \"False\"
+    .UseGeneralDispersionMu \"False\"
+    .Rho \"0.0\"
+    .ThermalType \"Normal\"
+    .ThermalConductivity \"0.20\"
+    .SetActiveMaterial \"all\"
+    .Colour \"0.94\", \"0.82\", \"0.76\"
+    .Wireframe \"False\"
+    .Transparency \"0\"
+    .Create
+End With
+""".strip()
+
+        if key in {"rogers ro3003", "rogers ro3003 lossy"}:
+            return f"""
+With Material
+    .Reset
+    .Name \"{sanitized_name}\"
+    .Folder \"\"
+    .FrqType \"all\"
+    .Type \"Normal\"
+    .SetMaterialUnit \"GHz\", \"mm\"
+    .Epsilon \"3\"
+    .Mu \"1.0\"
+    .Kappa \"0.0\"
+    .TanD \"0.0010\"
+    .TanDFreq \"10.0\"
+    .TanDGiven \"True\"
+    .TanDModel \"ConstTanD\"
+    .KappaM \"0.0\"
+    .TanDM \"0.0\"
+    .TanDMFreq \"0.0\"
+    .TanDMGiven \"False\"
+    .TanDMModel \"ConstKappa\"
+    .DispModelEps \"None\"
+    .DispModelMu \"None\"
+    .DispersiveFittingSchemeEps \"General 1st\"
+    .DispersiveFittingSchemeMu \"General 1st\"
+    .UseGeneralDispersionEps \"False\"
+    .UseGeneralDispersionMu \"False\"
+    .Rho \"0.0\"
+    .ThermalType \"Normal\"
+    .ThermalConductivity \"0.5\"
+    .SetActiveMaterial \"all\"
+    .Colour \"0.94\", \"0.82\", \"0.76\"
+    .Wireframe \"False\"
+    .Transparency \"0\"
+    .Create
+End With
+""".strip()
+
+        if key in {"rogers ro4350b", "rogers ro4350b lossy"}:
+            return f"""
+With Material
+    .Reset
+    .Name \"{sanitized_name}\"
+    .Folder \"\"
+    .FrqType \"all\"
+    .Type \"Normal\"
+    .SetMaterialUnit \"GHz\", \"mm\"
+    .Epsilon \"3.66\"
+    .Mu \"1.0\"
+    .Kappa \"0.0\"
+    .TanD \"0.0037\"
+    .TanDFreq \"10.0\"
+    .TanDGiven \"True\"
+    .TanDModel \"ConstTanD\"
+    .KappaM \"0.0\"
+    .TanDM \"0.0\"
+    .TanDMFreq \"0.0\"
+    .TanDMGiven \"False\"
+    .TanDMModel \"ConstKappa\"
+    .DispModelEps \"None\"
+    .DispModelMu \"None\"
+    .DispersiveFittingSchemeEps \"General 1st\"
+    .DispersiveFittingSchemeMu \"General 1st\"
+    .UseGeneralDispersionEps \"False\"
+    .UseGeneralDispersionMu \"False\"
+    .Rho \"0.0\"
+    .ThermalType \"Normal\"
+    .ThermalConductivity \"0.69\"
+    .SetActiveMaterial \"all\"
+    .Colour \"0.94\", \"0.82\", \"0.76\"
+    .Wireframe \"False\"
+    .Transparency \"0\"
+    .Create
+End With
+""".strip()
+
+        return None
+
+    @staticmethod
     def _sanitize_cst_name(value: Any) -> str:
         """Normalize names for CST object/material identifiers.
 
@@ -485,9 +831,14 @@ End With
         return f"Solver.FrequencyRange \"{parameters['start_ghz']}\", \"{parameters['stop_ghz']}\""
 
     def _define_material(self, parameters: Dict[str, Any]) -> str:
-        name = self._sanitize_cst_name(parameters["name"])
-        kind = parameters["kind"]
-        if kind == "conductor":
+        raw_name = str(parameters["name"]).strip()
+        name = self._sanitize_cst_name(raw_name)
+        kind = str(parameters.get("kind", "")).strip().lower()
+        preset = self._material_preset_macro(raw_name, name)
+        if preset is not None:
+            return preset
+
+        if kind in {"conductor", "metal", "lossy metal", "lossy_metal"}:
             conductivity = parameters.get("conductivity_s_per_m", 5.8e7)
             color = parameters.get("color_rgb", [1, 1, 0])
             if not isinstance(color, (list, tuple)) or len(color) != 3:

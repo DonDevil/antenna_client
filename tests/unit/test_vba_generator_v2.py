@@ -133,5 +133,121 @@ def test_define_conductor_material_sets_copper_color() -> None:
 
     assert 'With Material' in macro
     assert '.Type "Lossy metal"' in macro
-    assert '.Sigma "58000000.0"' in macro
+    assert '.Kappa "5.8e+007"' in macro
+    assert '.Rho "8930.0"' in macro
     assert '.Colour "1", "1", "0"' in macro
+
+
+def test_define_material_uses_gold_library_preset() -> None:
+    gen = VBAGenerator()
+
+    macro = gen.generate_macro(
+        "define_material",
+        {
+            "name": "Gold",
+            "kind": "conductor",
+        },
+    )
+
+    assert '.Name "Gold"' in macro
+    assert '.Type "Lossy metal"' in macro
+    assert '.Sigma "4.561e+007"' in macro
+    assert '.Rho "19320.0"' in macro
+
+
+def test_define_material_uses_silver_library_preset() -> None:
+    gen = VBAGenerator()
+
+    macro = gen.generate_macro(
+        "define_material",
+        {
+            "name": "Silver",
+            "kind": "conductor",
+        },
+    )
+
+    assert '.Name "Silver"' in macro
+    assert '.Type "Lossy metal"' in macro
+    assert '.Sigma "6.3012e007"' in macro
+    assert '.Rho "10500.0"' in macro
+
+
+def test_define_material_treats_lossy_metal_kind_as_conductor() -> None:
+    gen = VBAGenerator()
+
+    macro = gen.generate_macro(
+        "define_material",
+        {
+            "name": "CustomMetal",
+            "kind": "lossy metal",
+            "conductivity_s_per_m": 1.23e6,
+        },
+    )
+
+    assert '.Type "Lossy metal"' in macro
+    assert '.Sigma "1230000.0"' in macro
+
+
+def test_define_material_uses_fr4_library_preset() -> None:
+    gen = VBAGenerator()
+
+    macro = gen.generate_macro(
+        "define_material",
+        {
+            "name": "FR-4 (lossy)",
+            "kind": "dielectric",
+        },
+    )
+
+    assert '.Name "FR-4_(lossy)"' in macro
+    assert '.Epsilon "4.3"' in macro
+    assert '.TanD "0.025"' in macro
+    assert '.SetActiveMaterial "all"' in macro
+
+
+def test_define_material_uses_rogers_5880_library_preset_with_alias() -> None:
+    gen = VBAGenerator()
+
+    macro = gen.generate_macro(
+        "define_material",
+        {
+            "name": "Rogers RT/duroid 5880",
+            "kind": "dielectric",
+        },
+    )
+
+    assert '.Name "Rogers_RT_duroid_5880"' in macro
+    assert '.Epsilon "2.2"' in macro
+    assert '.TanD "0.0009"' in macro
+
+
+def test_define_material_uses_rogers_ro3003_library_preset() -> None:
+    gen = VBAGenerator()
+
+    macro = gen.generate_macro(
+        "define_material",
+        {
+            "name": "Rogers RO3003 (lossy)",
+            "kind": "dielectric",
+        },
+    )
+
+    assert '.Name "Rogers_RO3003_(lossy)"' in macro
+    assert '.Epsilon "3"' in macro
+    assert '.TanD "0.0010"' in macro
+
+
+def test_define_material_uses_rogers_ro4350b_library_preset() -> None:
+    gen = VBAGenerator()
+
+    macro = gen.generate_macro(
+        "define_material",
+        {
+            "name": "Rogers RO4350B (lossy)",
+            "kind": "dielectric",
+        },
+    )
+
+    assert '.Name "Rogers_RO4350B_(lossy)"' in macro
+    assert '.Epsilon "3.66"' in macro
+    assert '.TanD "0.0037"' in macro
