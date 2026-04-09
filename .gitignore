@@ -47,13 +47,13 @@ test_output.txt
 test_results.json
 
 # Data & Persistence
-data/
-*.db
-*.sqlite
-*.sqlite3
-*.json.bak
-sessions.db
-designs.db
+#data/
+#*.db
+#*.sqlite
+#*.sqlite3
+#*.json.bak
+#sessions.db
+#designs.db
 
 # OS
 .DS_Store
