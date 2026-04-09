@@ -106,7 +106,7 @@ class MockServerConnector:
                 "warnings": []
             }
         
-        elif endpoint == "/api/v1/client-feedback":
+        elif endpoint in {"/api/v1/client-feedback", "/api/v1/result"}:
             return {
                 "status": "completed",
                 "accepted": True,

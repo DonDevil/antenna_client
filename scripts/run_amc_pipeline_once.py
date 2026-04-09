@@ -559,7 +559,7 @@ async def run_once() -> int:
         if not s11_path:
             raise RuntimeError("Missing s11_trace_path from execution artifacts; cannot build valid feedback payload")
 
-        logger.info(f"STEP 4/4: Send feedback for iteration {loop_index}")
+        logger.info(f"STEP 4/4: Post CST result for iteration {loop_index}")
         feedback_payload = _build_feedback_payload(
             package=package,
             session_id=session_id,
@@ -575,7 +575,7 @@ async def run_once() -> int:
         connector_fb = ServerConnector(base_url, timeout_sec=timeout_sec)
         async with connector_fb:
             api_fb = ApiClient(connector_fb)
-            feedback_response = await api_fb.send_feedback(feedback_payload)
+            feedback_response = await api_fb.send_result(feedback_payload)
 
         iteration_report["feedback"] = {
             "request": feedback_payload,

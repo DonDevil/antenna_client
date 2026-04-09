@@ -316,7 +316,7 @@ class TestEndToEndFlow:
                 
                 # Send feedback to REAL server
                 logger.info(f"Sending feedback to {self.base_url}/api/v1/feedback")
-                response_data = await api_client.send_feedback(feedback)
+                response_data = await api_client.send_result(feedback)
             
             # Check response
             if not response_data:

@@ -46,19 +46,27 @@ class ApiClient:
             logger.error(f"Optimize request failed: {e}")
             raise
     
-    async def send_feedback(self, feedback: Dict[str, Any]) -> Dict[str, Any]:
-        """Send CST measurement feedback to server
-        
+    async def send_result(self, result_payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Post CST result payload to the canonical result endpoint.
+
         Args:
-            feedback: Design results and metrics
-            
+            result_payload: Extracted CST metrics and artifact references
+
         Returns:
             Server response
         """
         return await self.connector.post(
-            "/api/v1/client-feedback",
-            json=feedback
+            "/api/v1/result",
+            json=result_payload
         )
+
+    async def send_feedback(self, feedback: Dict[str, Any]) -> Dict[str, Any]:
+        """Backward-compatible alias for posting CST results.
+
+        This keeps existing callers working while the system migrates to
+        the explicit result endpoint naming.
+        """
+        return await self.send_result(feedback)
     
     async def chat(self, message: str, requirements: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Send chat message for intent capture and assistant guidance.

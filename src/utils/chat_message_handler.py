@@ -192,7 +192,7 @@ class FeedbackRequestWorker(_BaseWorker):
     async def _feedback_async(self, base_url: str) -> dict[str, Any]:
         async with ServerConnector(base_url, timeout_sec=30) as connector:
             api = ApiClient(connector)
-            return await api.send_feedback(self.payload)
+            return await api.send_result(self.payload)
 
 
 class CommandExecutionWorker(_BaseWorker):

@@ -6,7 +6,7 @@ Follows the server copilot's recommended workflow:
 1. GET /api/v1/health
 2. POST /api/v1/optimize
 3. Client executes returned command_package (simulated)
-4. POST /api/v1/client-feedback
+4. POST /api/v1/result
 5. Verify completed or refining
 
 Usage: python workflow_validation.py
@@ -185,9 +185,9 @@ class WorkflowValidator:
             return False
     
     async def step_4_client_feedback(self):
-        """Step 4: POST /api/v1/client-feedback"""
+        """Step 4: POST /api/v1/result"""
         print("\n" + "="*70)
-        print("STEP 4: Client Feedback → POST /api/v1/feedback")
+        print("STEP 4: Client Feedback → POST /api/v1/result")
         print("="*70)
         
         try:
@@ -224,7 +224,7 @@ class WorkflowValidator:
                 logger.info(f"Sending feedback: {json.dumps(feedback, indent=2)[:500]}...")
                 
                 # Send feedback
-                response = await api_client.send_feedback(feedback)
+                response = await api_client.send_result(feedback)
             
             logger.info(f"Response: {json.dumps(response, indent=2) if response else 'None'}")
             
