@@ -55,6 +55,7 @@ class ExecutionEngine:
         self._scoped_hint_cache: Dict[str, str] = {}
         self._geometry_context: Dict[str, Dict[str, Any]] = {}
         self._parameter_context: Dict[str, Any] = {}
+        self._material_context: Dict[str, Any] = {"defined": [], "by_kind": {}}
         logger.info("ExecutionEngine initialized")
     
     async def execute_command_package(self, package: CommandPackage) -> List[ExecutionResult]:
@@ -79,6 +80,7 @@ class ExecutionEngine:
         self._scoped_hint_cache = {}
         self._geometry_context = {}
         self._parameter_context = {}
+        self._material_context = {"defined": [], "by_kind": {}}
         self.dry_run = not self.cst_app.connect()
         logger.info(f"Starting execution of package with {len(package.commands)} commands")
         
@@ -179,6 +181,119 @@ class ExecutionEngine:
             merged.update(package_family_params)
         return merged
 
+    @staticmethod
+    def _first_string(*values: Any) -> str | None:
+        for value in values:
+            if isinstance(value, str):
+                text = value.strip()
+                if text:
+                    return text
+        return None
+
+    @staticmethod
+    def _first_from_list(value: Any) -> str | None:
+        if isinstance(value, list) and value:
+            first = value[0]
+            if isinstance(first, str):
+                text = first.strip()
+                if text:
+                    return text
+        return None
+
+    def _remember_material(self, params: Dict[str, Any]) -> None:
+        name = self._first_string(params.get("name"))
+        if not name:
+            return
+        defined = self._material_context.setdefault("defined", [])
+        if isinstance(defined, list) and name not in defined:
+            defined.append(name)
+
+        kind = self._first_string(params.get("kind"), params.get("type"))
+        if not kind:
+            return
+        kind_lower = kind.lower()
+        by_kind = self._material_context.setdefault("by_kind", {})
+        if not isinstance(by_kind, dict):
+            return
+        if kind_lower in {"conductor", "metal", "lossy metal"}:
+            by_kind["conductor"] = name
+        elif kind_lower in {"dielectric", "normal", "substrate"}:
+            by_kind["substrate"] = name
+
+    def _resolve_amc_materials(
+        self,
+        *,
+        package: CommandPackage,
+        command_params: Dict[str, Any],
+        family_params: Dict[str, Any],
+    ) -> tuple[str, str]:
+        substrate_candidates: List[str] = []
+        conductor_candidates: List[str] = []
+
+        def _add_unique(target: List[str], value: Any) -> None:
+            text = self._first_string(value)
+            if text and text not in target:
+                target.append(text)
+
+        # 1) Explicit command-level override from server command params.
+        _add_unique(substrate_candidates, command_params.get("substrate_material"))
+        _add_unique(substrate_candidates, command_params.get("substrate_name"))
+        _add_unique(substrate_candidates, command_params.get("dielectric_material"))
+        _add_unique(conductor_candidates, command_params.get("conductor_material"))
+        _add_unique(conductor_candidates, command_params.get("conductor_name"))
+        _add_unique(conductor_candidates, command_params.get("metal_material"))
+
+        # 2) Server-side family parameters and recipe payload.
+        _add_unique(substrate_candidates, family_params.get("substrate_material"))
+        _add_unique(substrate_candidates, family_params.get("substrate_name"))
+        _add_unique(conductor_candidates, family_params.get("conductor_material"))
+        _add_unique(conductor_candidates, family_params.get("conductor_name"))
+
+        extras = self._get_package_extras(package)
+        design_recipe = extras.get("design_recipe") if isinstance(extras.get("design_recipe"), dict) else {}
+        request_payload = extras.get("request") if isinstance(extras.get("request"), dict) else {}
+        design_constraints = (
+            request_payload.get("design_constraints") if isinstance(request_payload.get("design_constraints"), dict) else {}
+        )
+
+        _add_unique(substrate_candidates, design_recipe.get("substrate_material"))
+        _add_unique(substrate_candidates, design_recipe.get("substrate_name"))
+        _add_unique(conductor_candidates, design_recipe.get("conductor_material"))
+        _add_unique(conductor_candidates, design_recipe.get("conductor_name"))
+
+        _add_unique(substrate_candidates, self._first_from_list(design_constraints.get("allowed_substrates")))
+        _add_unique(conductor_candidates, self._first_from_list(design_constraints.get("allowed_materials")))
+
+        # 3) Materials already used in prior geometry commands in this package.
+        substrate_geom = self._geometry_context.get("substrate") if isinstance(self._geometry_context.get("substrate"), dict) else {}
+        _add_unique(substrate_candidates, substrate_geom.get("material"))
+
+        patch_geom = self._geometry_context.get("patch") if isinstance(self._geometry_context.get("patch"), dict) else {}
+        ground_geom = self._geometry_context.get("ground") if isinstance(self._geometry_context.get("ground"), dict) else {}
+        feed_geom = self._geometry_context.get("feed") if isinstance(self._geometry_context.get("feed"), dict) else {}
+        _add_unique(conductor_candidates, patch_geom.get("material"))
+        _add_unique(conductor_candidates, ground_geom.get("material"))
+        _add_unique(conductor_candidates, feed_geom.get("material"))
+
+        # 4) Defined material catalog tracked from define_material commands.
+        by_kind = self._material_context.get("by_kind") if isinstance(self._material_context.get("by_kind"), dict) else {}
+        _add_unique(substrate_candidates, by_kind.get("substrate"))
+        _add_unique(conductor_candidates, by_kind.get("conductor"))
+
+        defined_materials = self._material_context.get("defined") if isinstance(self._material_context.get("defined"), list) else []
+        if defined_materials:
+            if not substrate_candidates:
+                _add_unique(substrate_candidates, defined_materials[0])
+            if not conductor_candidates and len(defined_materials) > 1:
+                _add_unique(conductor_candidates, defined_materials[1])
+
+        substrate_material = substrate_candidates[0] if substrate_candidates else "FR-4_(lossy)"
+        conductor_material = conductor_candidates[0] if conductor_candidates else "Copper_(annealed)"
+
+        self.artifacts["amc_substrate_material"] = substrate_material
+        self.artifacts["amc_conductor_material"] = conductor_material
+        return substrate_material, conductor_material
+
     def _extract_base_dims_for_amc(self, package: CommandPackage) -> Dict[str, float]:
         dims = dict(getattr(package, "predicted_dimensions", {}) or {})
         params = dict(self._parameter_context)
@@ -206,7 +321,13 @@ class ExecutionEngine:
             "f0": max(0.1, f0),
         }
 
-    def _build_amc_commands_heuristic(self, base_dims: Dict[str, float], component: str) -> List[Dict[str, Any]]:
+    def _build_amc_commands_heuristic(
+        self,
+        base_dims: Dict[str, float],
+        component: str,
+        substrate_material: str,
+        conductor_material: str,
+    ) -> List[Dict[str, Any]]:
         px = base_dims["px"]
         py = base_dims["py"]
         sx = base_dims["sx"]
@@ -236,6 +357,8 @@ class ExecutionEngine:
 
         return self._materialize_amc_brick_commands(
             component=component,
+            substrate_material=substrate_material,
+            conductor_material=conductor_material,
             t_cu=t_cu,
             amc_period=amc_period,
             amc_cell=amc_cell,
@@ -251,6 +374,8 @@ class ExecutionEngine:
         base_dims: Dict[str, float],
         family_params: Dict[str, Any],
         component: str,
+        substrate_material: str,
+        conductor_material: str,
     ) -> List[Dict[str, Any]]:
         px = base_dims["px"]
         py = base_dims["py"]
@@ -291,6 +416,8 @@ class ExecutionEngine:
 
         return self._materialize_amc_brick_commands(
             component=component,
+            substrate_material=substrate_material,
+            conductor_material=conductor_material,
             t_cu=t_cu,
             amc_period=amc_period,
             amc_cell=amc_cell,
@@ -305,6 +432,8 @@ class ExecutionEngine:
         self,
         *,
         component: str,
+        substrate_material: str,
+        conductor_material: str,
         t_cu: float,
         amc_period: float,
         amc_cell: float,
@@ -378,7 +507,7 @@ class ExecutionEngine:
                 "params": {
                     "name": "amc_substrate",
                     "component": component,
-                    "material": "FR-4_(lossy)",
+                    "material": substrate_material,
                     "xrange": [-amc_size_x / 2.0, amc_size_x / 2.0],
                     "yrange": [-amc_size_y / 2.0, amc_size_y / 2.0],
                     "zrange": [amc_sub_z0, amc_sub_z1],
@@ -391,7 +520,7 @@ class ExecutionEngine:
                 "params": {
                     "name": "amc_ground",
                     "component": component,
-                    "material": "Copper_(annealed)",
+                    "material": conductor_material,
                     "xrange": [-amc_size_x / 2.0, amc_size_x / 2.0],
                     "yrange": [-amc_size_y / 2.0, amc_size_y / 2.0],
                     "zrange": [amc_gnd_z0, amc_gnd_z1],
@@ -413,7 +542,7 @@ class ExecutionEngine:
                         "params": {
                             "name": f"amc_cell_{ix}_{iy}",
                             "component": component,
-                            "material": "Copper_(annealed)",
+                            "material": conductor_material,
                             "xrange": [cx - (amc_cell / 2.0), cx + (amc_cell / 2.0)],
                             "yrange": [cy - (amc_cell / 2.0), cy + (amc_cell / 2.0)],
                             "zrange": [amc_cell_z0, amc_cell_z1],
@@ -431,14 +560,30 @@ class ExecutionEngine:
 
         base_dims = self._extract_base_dims_for_amc(package)
         family_params = self._extract_server_amc_family_params(package)
+        substrate_material, conductor_material = self._resolve_amc_materials(
+            package=package,
+            command_params=dict(command.params),
+            family_params=family_params,
+        )
         use_server = strategy in {"server", "server_family_parameters", "server_params"}
         can_use_server = use_server and self._is_number(family_params.get("amc_unit_cell_period_mm"))
 
         if can_use_server:
-            command_dicts = self._build_amc_commands_server(base_dims, family_params, component)
+            command_dicts = self._build_amc_commands_server(
+                base_dims,
+                family_params,
+                component,
+                substrate_material,
+                conductor_material,
+            )
             self.artifacts["amc_impl_strategy"] = "server_family_parameters"
         else:
-            command_dicts = self._build_amc_commands_heuristic(base_dims, component)
+            command_dicts = self._build_amc_commands_heuristic(
+                base_dims,
+                component,
+                substrate_material,
+                conductor_material,
+            )
             self.artifacts["amc_impl_strategy"] = "client_heuristic"
 
         synthetic: List[Command] = []
@@ -792,6 +937,35 @@ class ExecutionEngine:
             derived.setdefault("calculate_port_extension", False)
         return derived
 
+    def _build_history_title(self, command: Command, macro_params: Dict[str, Any]) -> str:
+        command_name = str(command.command or "command").strip().lower()
+        detail = ""
+
+        if command_name in {"define_parameter", "update_parameter", "set_parameter"}:
+            pname = str(macro_params.get("name", "")).strip()
+            if pname:
+                detail = pname
+        elif command_name in {"define_brick", "brick", "create_patch", "create_substrate", "create_ground_plane", "create_feedline"}:
+            component = str(macro_params.get("component", "")).strip()
+            name = str(macro_params.get("name", "")).strip()
+            if component and name:
+                detail = f"{component}.{name}"
+            elif name:
+                detail = name
+            elif component:
+                detail = component
+        elif command_name in {"create_component", "new_component"}:
+            detail = str(macro_params.get("component") or macro_params.get("name") or "").strip()
+        elif command_name == "define_material":
+            detail = str(macro_params.get("name") or "").strip()
+        elif command_name == "create_port":
+            port_id = macro_params.get("port_id")
+            if port_id is not None:
+                detail = f"port_{port_id}"
+
+        base = command_name if not detail else f"{command_name} {detail}"
+        return base[:80]
+
     async def _execute_command(self, command: Command, package: CommandPackage) -> ExecutionResult:
         """Execute single command
         
@@ -889,6 +1063,9 @@ class ExecutionEngine:
                     output=f"{mode.capitalize()} {action} via Parameter List API",
                     macro=vba_code,
                 )
+
+            if command.command == "define_material":
+                self._remember_material(dict(command.params))
 
             if command.command == "implement_amc":
                 subcommands = self._build_amc_subcommands(command, package)
@@ -1071,7 +1248,12 @@ class ExecutionEngine:
 
             # Execute live against CST; command failures are surfaced to on_failure policy.
             if not self.dry_run:
-                executed = self.cst_app.execute_macro(vba_code, title=command.command)
+                history_title = self._build_history_title(command, macro_params)
+                try:
+                    executed = self.cst_app.execute_macro(vba_code, title=history_title)
+                except TypeError:
+                    # Backward compatibility for older CSTApp mocks/stubs without title kwarg.
+                    executed = self.cst_app.execute_macro(vba_code)
                 if not executed:
                     return ExecutionResult(
                         f"{command.seq}:{command.command}",

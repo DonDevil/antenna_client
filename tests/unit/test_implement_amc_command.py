@@ -42,6 +42,8 @@ def test_execute_package_with_implement_amc_uses_server_family_params(monkeypatc
         "predicted_metrics": {"center_frequency_ghz": 2.45},
         "design_recipe": {
             "family": "amc_patch",
+            "substrate_material": "Rogers RO3003",
+            "conductor_material": "Copper (annealed)",
             "family_parameters": {
                 "amc_unit_cell_period_mm": 18.0,
                 "amc_patch_size_mm": 14.4,
@@ -82,6 +84,8 @@ def test_execute_package_with_implement_amc_uses_server_family_params(monkeypatc
     artifacts = engine.get_artifacts()
     assert artifacts.get("amc_implemented") is True
     assert artifacts.get("amc_impl_strategy") == "server_family_parameters"
+    assert artifacts.get("amc_substrate_material") == "Rogers RO3003"
+    assert artifacts.get("amc_conductor_material") == "Copper (annealed)"
 
     implement_result = next(r for r in results if r.command_id.endswith(":implement_amc"))
     assert "Implemented AMC geometry" in implement_result.output

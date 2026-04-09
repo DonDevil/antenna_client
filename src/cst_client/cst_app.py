@@ -64,6 +64,15 @@ class CSTApp:
         artifacts_dir = Path("artifacts") / "exports"
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         return artifacts_dir / f"{safe_hint}.{extension.lstrip('.')}"
+
+    @staticmethod
+    def _normalize_history_title(title: str) -> str:
+        raw = str(title or "").strip()
+        if not raw:
+            return "command"
+        normalized = raw.replace("_", " ").replace(":", " ").strip()
+        normalized = re.sub(r"\s+", " ", normalized)
+        return normalized[:80]
     
     def connect(self) -> bool:
         """Connect to a running CST design environment or create one."""
@@ -122,7 +131,7 @@ class CSTApp:
             logger.error(f"Failed to open project: {e}")
             return False
     
-    def execute_macro(self, macro_code: str, title: str = "copilot_macro") -> bool:
+    def execute_macro(self, macro_code: str, title: str = "command") -> bool:
         """Execute VBA macro by adding it to CST history and rebuilding."""
         for attempt in range(2):
             if not self.mws:
@@ -140,12 +149,13 @@ class CSTApp:
                     logger.error("No active project after refresh")
                     return False
                 self._history_counter += 1
-                history_title = f"{title}_{self._history_counter:03d}"
+                normalized = self._normalize_history_title(title)
+                history_title = f"{self._history_counter:04d} | {normalized}"
                 try:
                     self.mws.add_to_history(history_title, macro_code)
                 except Exception as exc:
                     msg = str(exc).lower()
-                    if title == "define_material" and "already exists" in msg:
+                    if normalized.startswith("define material") and "already exists" in msg:
                         logger.info("Material already exists; skipping redefinition")
                         return True
                     if "connection has been closed" in msg and attempt == 0:

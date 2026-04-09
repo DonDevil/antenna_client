@@ -110,6 +110,68 @@ def _extract_scalar_dimensions(package_data: dict[str, Any], commands: list[dict
     }
 
 
+def _first_string(*values: Any) -> Optional[str]:
+    for value in values:
+        if isinstance(value, str):
+            text = value.strip()
+            if text:
+                return text
+    return None
+
+
+def _extract_amc_materials(package_data: dict[str, Any], commands: list[dict[str, Any]]) -> tuple[str, str]:
+    recipe = package_data.get("design_recipe") if isinstance(package_data.get("design_recipe"), dict) else {}
+    family_params = recipe.get("family_parameters") if isinstance(recipe.get("family_parameters"), dict) else {}
+    request_payload = package_data.get("request") if isinstance(package_data.get("request"), dict) else {}
+    design_constraints = request_payload.get("design_constraints") if isinstance(request_payload.get("design_constraints"), dict) else {}
+
+    substrate = _first_string(
+        family_params.get("substrate_material"),
+        family_params.get("substrate_name"),
+        recipe.get("substrate_material"),
+        recipe.get("substrate_name"),
+    )
+    conductor = _first_string(
+        family_params.get("conductor_material"),
+        family_params.get("conductor_name"),
+        recipe.get("conductor_material"),
+        recipe.get("conductor_name"),
+    )
+
+    if substrate is None:
+        allowed = design_constraints.get("allowed_substrates")
+        if isinstance(allowed, list) and allowed:
+            substrate = _first_string(allowed[0])
+
+    if conductor is None:
+        allowed = design_constraints.get("allowed_materials")
+        if isinstance(allowed, list) and allowed:
+            conductor = _first_string(allowed[0])
+
+    if substrate is None:
+        for cmd in commands:
+            if str(cmd.get("command", "")).strip() != "define_brick":
+                continue
+            params = cmd.get("params") or {}
+            if str(params.get("name", "")).strip().lower() == "substrate":
+                substrate = _first_string(params.get("material"))
+                if substrate:
+                    break
+
+    if conductor is None:
+        for cmd in commands:
+            if str(cmd.get("command", "")).strip() != "define_brick":
+                continue
+            params = cmd.get("params") or {}
+            name = str(params.get("name", "")).strip().lower()
+            if name in {"patch", "ground", "feed"}:
+                conductor = _first_string(params.get("material"))
+                if conductor:
+                    break
+
+    return substrate or "FR-4_(lossy)", conductor or "Copper_(annealed)"
+
+
 def _materialize_primary_patch_geometry(package_data: dict[str, Any]) -> dict[str, Any]:
     commands = list(package_data.get("commands") or [])
     if not commands:
@@ -171,7 +233,12 @@ def _materialize_primary_patch_geometry(package_data: dict[str, Any]) -> dict[st
     return package_data
 
 
-def _build_amc_commands(base_dims: dict[str, float], component: str = "amc") -> list[dict[str, Any]]:
+def _build_amc_commands(
+    base_dims: dict[str, float],
+    component: str = "amc",
+    substrate_material: str = "FR-4_(lossy)",
+    conductor_material: str = "Copper_(annealed)",
+) -> list[dict[str, Any]]:
     px = base_dims["px"]
     py = base_dims["py"]
     sx = base_dims["sx"]
@@ -263,7 +330,7 @@ def _build_amc_commands(base_dims: dict[str, float], component: str = "amc") -> 
             "params": {
                 "name": "amc_substrate",
                 "component": component,
-                "material": "FR-4_(lossy)",
+                "material": substrate_material,
                 "xrange": [-amc_size_x / 2.0, amc_size_x / 2.0],
                 "yrange": [-amc_size_y / 2.0, amc_size_y / 2.0],
                 "zrange": [amc_sub_z0, amc_sub_z1],
@@ -276,7 +343,7 @@ def _build_amc_commands(base_dims: dict[str, float], component: str = "amc") -> 
             "params": {
                 "name": "amc_ground",
                 "component": component,
-                "material": "Copper_(annealed)",
+                "material": conductor_material,
                 "xrange": [-amc_size_x / 2.0, amc_size_x / 2.0],
                 "yrange": [-amc_size_y / 2.0, amc_size_y / 2.0],
                 "zrange": [amc_gnd_z0, amc_gnd_z1],
@@ -298,7 +365,7 @@ def _build_amc_commands(base_dims: dict[str, float], component: str = "amc") -> 
                     "params": {
                         "name": f"amc_cell_{ix}_{iy}",
                         "component": component,
-                        "material": "Copper_(annealed)",
+                        "material": conductor_material,
                         "xrange": [cx - (amc_cell / 2.0), cx + (amc_cell / 2.0)],
                         "yrange": [cy - (amc_cell / 2.0), cy + (amc_cell / 2.0)],
                         "zrange": [amc_cell_z0, amc_cell_z1],
@@ -326,7 +393,12 @@ def _inject_amc_geometry_if_missing(package_data: dict[str, Any]) -> dict[str, A
         return package_data
 
     dims = _extract_scalar_dimensions(package_data, commands)
-    amc_commands = _build_amc_commands(dims)
+    substrate_material, conductor_material = _extract_amc_materials(package_data, commands)
+    amc_commands = _build_amc_commands(
+        dims,
+        substrate_material=substrate_material,
+        conductor_material=conductor_material,
+    )
 
     rebuild_index = next(
         (idx for idx, cmd in enumerate(commands) if str(cmd.get("command", "")).strip() == "rebuild_model"),
