@@ -177,10 +177,15 @@ class ExecutionEngine:
             self._geometry_context["feed"] = dict(params)
         elif command_name == "define_brick":
             name = str(params.get("name", "")).strip().lower()
+            component = str(params.get("component", "")).strip().lower()
             if "substrate" in name:
-                self._geometry_context["substrate"] = dict(params)
+                # Keep antenna substrate as primary context for feed/port derivation.
+                if component == "antenna" or "substrate" not in self._geometry_context:
+                    self._geometry_context["substrate"] = dict(params)
             elif "ground" in name:
-                self._geometry_context["ground"] = dict(params)
+                # Do not let AMC reflector ground overwrite patch-ground reference.
+                if component == "antenna" or "ground" not in self._geometry_context:
+                    self._geometry_context["ground"] = dict(params)
             elif "patch" in name:
                 self._geometry_context["patch"] = dict(params)
             elif "feed" in name:
@@ -734,16 +739,19 @@ class ExecutionEngine:
             macro_path = artifacts_dir / f"{command.seq:02d}_{command.command}.bas"
             macro_path.write_text(vba_code, encoding="utf-8")
 
-            # Best-effort execution path. Existing CST COM integration remains partial,
-            # so the engine transparently falls back to dry-run preparation mode.
+            # Execute live against CST; command failures are surfaced to on_failure policy.
             if not self.dry_run:
-                executed = self.cst_app.execute_macro(vba_code)
+                executed = self.cst_app.execute_macro(vba_code, title=command.command)
                 if not executed:
-                    logger.warning(
-                        f"CST COM execution unavailable for {command.seq}:{command.command}; "
-                        "continuing in dry-run preparation mode"
+                    return ExecutionResult(
+                        f"{command.seq}:{command.command}",
+                        success=False,
+                        error=(
+                            "Failed to execute macro in CST for "
+                            f"{command.seq}:{command.command}"
+                        ),
+                        macro=vba_code,
                     )
-                    self.dry_run = True
 
             await asyncio.sleep(0.1)
             mode = "prepared" if self.dry_run else "executed"

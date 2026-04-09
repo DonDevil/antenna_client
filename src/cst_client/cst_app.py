@@ -6,6 +6,7 @@ import json
 import math
 import platform
 import re
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -123,32 +124,47 @@ class CSTApp:
     
     def execute_macro(self, macro_code: str, title: str = "copilot_macro") -> bool:
         """Execute VBA macro by adding it to CST history and rebuilding."""
-        if not self.mws:
-            logger.error("No active project")
-            return False
-        
-        try:
-            self._refresh_active_project()
+        for attempt in range(2):
             if not self.mws:
-                logger.error("No active project after refresh")
-                return False
-            self._history_counter += 1
-            history_title = f"{title}_{self._history_counter:03d}"
+                self._refresh_active_project()
+            if not self.mws:
+                if attempt == 0 and self.connect():
+                    self._refresh_active_project()
+                if not self.mws:
+                    logger.error("No active project")
+                    return False
+
             try:
-                self.mws.add_to_history(history_title, macro_code)
-                self.mws.full_history_rebuild()
-            except Exception as exc:
-                msg = str(exc).lower()
-                if title == "define_material" and "already exists" in msg:
-                    logger.info("Material already exists; skipping redefinition")
-                    return True
-                raise
-            self._refresh_active_project()
-            logger.debug(f"Macro executed via CST history: {history_title}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to execute macro: {e}")
-            return False
+                self._refresh_active_project()
+                if not self.mws:
+                    logger.error("No active project after refresh")
+                    return False
+                self._history_counter += 1
+                history_title = f"{title}_{self._history_counter:03d}"
+                try:
+                    self.mws.add_to_history(history_title, macro_code)
+                except Exception as exc:
+                    msg = str(exc).lower()
+                    if title == "define_material" and "already exists" in msg:
+                        logger.info("Material already exists; skipping redefinition")
+                        return True
+                    if "connection has been closed" in msg and attempt == 0:
+                        logger.warning("CST connection dropped during macro execution; reconnecting and retrying once")
+                        self.connected = False
+                        self.project = None
+                        self.mws = None
+                        if self.connect():
+                            self._refresh_active_project()
+                            continue
+                    raise
+                self._refresh_active_project()
+                logger.debug(f"Macro executed via CST history: {history_title}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to execute macro: {e}")
+                return False
+
+        return False
 
     def run_simulation(self, timeout_sec: int = 600) -> bool:
         """Run solver using CST's model3d API."""
@@ -224,34 +240,48 @@ class CSTApp:
             return None
 
         export_path = self._resolve_artifact_path(destination_hint, "txt")
-        candidates = []
-        try:
-            tree_items = list(self.mws.get_tree_items())
+        candidates: list[str] = []
+        for _ in range(10):
+            try:
+                self._refresh_active_project()
+                tree_items = list(self.mws.get_tree_items())
+            except Exception:
+                tree_items = []
+
             exact = [item for item in tree_items if item.startswith("1D Results\\S-Parameters\\")]
             if exact:
-                candidates.extend(exact)
-            else:
-                # Fallback to historical names if tree listing is sparse
-                candidates.extend([
-                    r"1D Results\\S-Parameters\\S1,1",
-                    r"1D Results\\S-Parameters\\S(1,1)",
-                    r"1D Results\\S-Parameters\\SZmax(1),Zmax(1)",
-                ])
-        except Exception:
-            candidates.extend([
-                r"1D Results\\S-Parameters\\S1,1",
-                r"1D Results\\S-Parameters\\S(1,1)",
-                r"1D Results\\S-Parameters\\SZmax(1),Zmax(1)",
-            ])
+                candidates = exact
+                break
+
+            alt = [
+                item
+                for item in tree_items
+                if item.startswith("1D Results\\Port signals\\") and item.lower().endswith("o1,1")
+            ]
+            if alt:
+                candidates = alt
+                break
+
+            time.sleep(1.0)
+
+        if not candidates:
+            # Fallback to historical names if tree listing is sparse
+            candidates = [
+                r"1D Results\S-Parameters\S1,1",
+                r"1D Results\S-Parameters\S(1,1)",
+                r"1D Results\S-Parameters\SZmax(1),Zmax(1)",
+                r"1D Results\Port signals\o1,1",
+            ]
 
         for item in candidates:
             try:
                 self.mws.SelectTreeItem(item)
                 self.mws.StoreCurvesInASCIIFile(str(export_path.resolve()))
-                if export_path.exists():
+                if export_path.exists() and export_path.stat().st_size > 0:
                     logger.info(f"Exported S-parameters to {export_path}")
                     return str(export_path.resolve())
-            except Exception:
+            except Exception as exc:
+                logger.debug(f"S-parameter export candidate failed for '{item}': {exc}")
                 continue
 
         logger.error(f"Failed to export S-parameters from candidate items: {candidates}")
@@ -259,10 +289,11 @@ class CSTApp:
 
     @staticmethod
     def _parse_frequency_ghz_from_item(item: str) -> Optional[float]:
-        match = re.search(r"(?:f\s*=\s*)?([0-9]+(?:\.[0-9]+)?)\s*(ghz|mhz|khz|hz)?", item, flags=re.IGNORECASE)
+        normalized = re.sub(r"(?<=\d)p(?=\d)", ".", item, flags=re.IGNORECASE)
+        match = re.search(r"(?:f\s*=\s*)?([0-9]+(?:[\.,][0-9]+)?)\s*(ghz|mhz|khz|hz)?", normalized, flags=re.IGNORECASE)
         if not match:
             return None
-        value = float(match.group(1))
+        value = float(match.group(1).replace(",", "."))
         unit = (match.group(2) or "ghz").lower()
         if unit == "ghz":
             return value
@@ -400,7 +431,13 @@ class CSTApp:
         metadata_path = self._resolve_artifact_path(f"{destination_hint}_meta", "json")
 
         try:
-            tree_items = list(self.mws.get_tree_items())
+            tree_items = []
+            for _ in range(10):
+                self._refresh_active_project()
+                tree_items = list(self.mws.get_tree_items())
+                if any("farfield" in item.lower() for item in tree_items):
+                    break
+                time.sleep(1.0)
         except Exception as exc:
             logger.error(f"Unable to enumerate CST tree items for far-field export: {exc}")
             tree_items = []
