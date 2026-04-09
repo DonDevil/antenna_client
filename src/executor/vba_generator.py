@@ -548,21 +548,35 @@ End With
         start = parameters["start_mm"]
         end = parameters["end_mm"]
         half_width = self._expr_binary(parameters["width_mm"], "/", 2)
+        def _safe_min(a: Any, b: Any) -> Any:
+            """Sort two bounds correctly for both numeric values and CST parameter expressions.
+
+            Python's built-in min/max uses lexicographic ordering for strings, which gives
+            wrong Yrange bounds when the values are CST parameter expressions
+            (e.g. min("-patch_l/2", "-sub_l/2") → "-patch_l/2" due to 'p' < 's', but
+            mathematically -patch_l/2 > -sub_l/2).  When either value is a non-numeric
+            expression, the caller is responsible for passing start as the lower bound;
+            we return them unchanged so CST evaluates them in the correct Yrange order.
+            """
+            if self._is_numeric_value(a) and self._is_numeric_value(b):
+                return (min(float(str(a)), float(str(b))), max(float(str(a)), float(str(b))))
+            return (a, b)  # caller guarantees a <= b for parameter expressions
+
         if start["x"] == end["x"] and start["y"] != end["y"]:
             x_min = self._expr_binary(start["x"], "-", half_width)
             x_max = self._expr_binary(start["x"], "+", half_width)
-            y_min = min(start["y"], end["y"])
-            y_max = max(start["y"], end["y"])
+            y_min, y_max = _safe_min(start["y"], end["y"])
         elif start["y"] == end["y"] and start["x"] != end["x"]:
-            x_min = min(start["x"], end["x"])
-            x_max = max(start["x"], end["x"])
+            x_min, x_max = _safe_min(start["x"], end["x"])
             y_min = self._expr_binary(start["y"], "-", half_width)
             y_max = self._expr_binary(start["y"], "+", half_width)
         else:
-            x_min = self._expr_binary(min(start["x"], end["x"]), "-", half_width)
-            x_max = self._expr_binary(max(start["x"], end["x"]), "+", half_width)
-            y_min = self._expr_binary(min(start["y"], end["y"]), "-", half_width)
-            y_max = self._expr_binary(max(start["y"], end["y"]), "+", half_width)
+            xl, xh = _safe_min(start["x"], end["x"])
+            yl, yh = _safe_min(start["y"], end["y"])
+            x_min = self._expr_binary(xl, "-", half_width)
+            x_max = self._expr_binary(xh, "+", half_width)
+            y_min = self._expr_binary(yl, "-", half_width)
+            y_max = self._expr_binary(yh, "+", half_width)
         z_min = start["z"]
         z_max = self._expr_binary(start["z"], "+", parameters["thickness_mm"])
         return self._brick(parameters["name"], self._component_name(parameters), parameters["material"], x_min, x_max, y_min, y_max, z_min, z_max)

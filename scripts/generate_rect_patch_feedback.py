@@ -14,13 +14,23 @@ import csv
 import json
 import math
 import random
+import signal
 import sys
+import threading
 import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+_SHUTDOWN = threading.Event()
+
+
+def _sigint_handler(signum: int, frame: object) -> None:  # noqa: ARG001
+    if not _SHUTDOWN.is_set():
+        print("\n[Ctrl+C] Shutdown requested — current sample will complete then script exits.", flush=True)
+    _SHUTDOWN.set()
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -105,7 +115,7 @@ SAFE_BOUNDS = {
     "substrate_height_mm": (0.8, 3.2),
     "patch_length_mm": (5.0, 80.0),
     "patch_width_mm": (5.0, 100.0),
-    "feed_width_mm": (0.2, 8.0),
+    "feed_width_mm": (0.5, 8.0),
     "feed_offset_y_mm": (-50.0, 0.0),
 }
 
@@ -138,6 +148,24 @@ class PatchGeometry:
     feed_width_mm: float
     feed_offset_x_mm: float
     feed_offset_y_mm: float
+
+
+PARAM_DEFAULTS = {
+    "sub_w": 40.0,
+    "sub_l": 50.0,
+    "sub_h": 1.6,
+    "patch_w": 24.0,
+    "patch_l": 20.0,
+    "patch_h": 0.035,
+    "feed_w": 2.0,
+    "feed_x": 0.0,
+    "freq_start_ghz": 2.0,
+    "freq_stop_ghz": 3.0,
+    "ff_freq_ghz": 2.4,
+    "er_sub": 2.2,
+    "tan_delta_sub": 0.001,
+    "sigma_cond": 5.8e7,
+}
 
 
 def _clamp(value: float, bounds: tuple[float, float]) -> float:
@@ -192,19 +220,22 @@ def _sample_input(rng: random.Random) -> SampleInput:
 
 
 def _microstrip_50ohm_width_mm(substrate_height_mm: float, epsilon_r: float) -> float:
+    """Hammerstad 50-ohm microstrip trace width (Wheeler/Schneider synthesis)."""
     h = max(substrate_height_mm, 0.1)
     er = max(epsilon_r, 1.1)
-    a = (377.0 * math.pi) / (2.0 * 50.0 * math.sqrt(er))
-    w_h = (8.0 * math.exp(a)) / (math.exp(2.0 * a) - 2.0)
+    # Narrow-trace trial (W/H < 2): A-parameter form
+    A = (50.0 / 60.0) * math.sqrt((er + 1.0) / 2.0) + ((er - 1.0) / (er + 1.0)) * (0.23 + 0.11 / er)
+    w_h = (8.0 * math.exp(A)) / (math.exp(2.0 * A) - 2.0)
     if w_h > 2.0:
-        b = (377.0 * math.pi) / (2.0 * 50.0 * math.sqrt(er))
+        # Wide-trace case (W/H >= 2): B-parameter form
+        B = (377.0 * math.pi) / (2.0 * 50.0 * math.sqrt(er))
         w_h = (2.0 / math.pi) * (
-            b
+            B
             - 1.0
-            - math.log(2.0 * b - 1.0)
-            + ((er - 1.0) / (2.0 * er)) * (math.log(b - 1.0) + 0.39 - 0.61 / er)
+            - math.log(2.0 * B - 1.0)
+            + ((er - 1.0) / (2.0 * er)) * (math.log(B - 1.0) + 0.39 - 0.61 / er)
         )
-    return max(0.2, min(8.0, w_h * h))
+    return max(0.5, min(8.0, w_h * h))
 
 
 def _baseline_geometry(sample: SampleInput) -> PatchGeometry:
@@ -224,10 +255,10 @@ def _baseline_geometry(sample: SampleInput) -> PatchGeometry:
         _microstrip_50ohm_width_mm(sample.substrate_height_mm, sample.substrate_epsilon_r),
         SAFE_BOUNDS["feed_width_mm"],
     )
-    feed_offset_y_mm = _clamp(-(patch_length_mm * 0.18), SAFE_BOUNDS["feed_offset_y_mm"])
+    feed_offset_y_mm = -patch_length_mm / 2.0
     substrate_length_mm = max(patch_length_mm + 12.0 * sample.substrate_height_mm, patch_length_mm + 20.0)
     substrate_width_mm = max(patch_width_mm + 12.0 * sample.substrate_height_mm, patch_width_mm + 20.0)
-    feed_length_mm = max(8.0, substrate_length_mm / 2.0 - abs(feed_offset_y_mm))
+    feed_length_mm = max(0.5, substrate_length_mm / 2.0 - patch_length_mm / 2.0)
 
     return PatchGeometry(
         patch_length_mm=patch_length_mm,
@@ -246,11 +277,11 @@ def _perturb_geometry(base: PatchGeometry, rng: random.Random) -> PatchGeometry:
     patch_length_mm = _clamp(base.patch_length_mm * rng.uniform(0.85, 1.15), SAFE_BOUNDS["patch_length_mm"])
     patch_width_mm = _clamp(base.patch_width_mm * rng.uniform(0.85, 1.15), SAFE_BOUNDS["patch_width_mm"])
     feed_width_mm = _clamp(base.feed_width_mm * rng.uniform(0.8, 1.2), SAFE_BOUNDS["feed_width_mm"])
-    feed_offset_y_mm = _clamp(base.feed_offset_y_mm * rng.uniform(0.8, 1.2), SAFE_BOUNDS["feed_offset_y_mm"])
+    feed_offset_y_mm = -patch_length_mm / 2.0
 
     substrate_length_mm = max(base.substrate_length_mm, patch_length_mm + 20.0)
     substrate_width_mm = max(base.substrate_width_mm, patch_width_mm + 20.0)
-    feed_length_mm = max(8.0, substrate_length_mm / 2.0 - abs(feed_offset_y_mm))
+    feed_length_mm = max(0.5, substrate_length_mm / 2.0 - patch_length_mm / 2.0)
 
     return PatchGeometry(
         patch_length_mm=patch_length_mm,
@@ -302,94 +333,119 @@ def _apply_macro(cst: CSTApp, generator: VBAGenerator, command: str, params: dic
 def _build_model(
     cst: CSTApp,
     generator: VBAGenerator,
-    sample: SampleInput,
-    geom: PatchGeometry,
     project_name: str,
 ) -> None:
     if not cst.create_project(project_name):
         raise RuntimeError("Failed to create CST project")
 
     _apply_macro(cst, generator, "set_units", {"geometry": "mm", "frequency": "GHz"})
-    margin_ghz = max(0.3, sample.target_bandwidth_mhz / 1000.0)
-    _apply_macro(
-        cst,
-        generator,
-        "set_frequency_range",
-        {
-            "start_ghz": round(max(0.5, sample.target_frequency_ghz - margin_ghz), 4),
-            "stop_ghz": round(sample.target_frequency_ghz + margin_ghz, 4),
-        },
-    )
+
+    for param_name, default_value in PARAM_DEFAULTS.items():
+        if not cst.set_parameter(param_name, default_value, create_only=True):
+            raise RuntimeError(f"Failed to define CST parameter: {param_name}")
+
+    _apply_macro(cst, generator, "set_frequency_range", {
+        "start_ghz": "freq_start_ghz",
+        "stop_ghz": "freq_stop_ghz",
+    })
 
     _apply_macro(cst, generator, "define_material", {
-        "name": sample.substrate_name,
+        "name": "dataset_substrate",
         "kind": "dielectric",
-        "epsilon_r": sample.substrate_epsilon_r,
-        "loss_tangent": sample.substrate_loss_tangent,
+        "epsilon_r": "er_sub",
+        "loss_tangent": "tan_delta_sub",
     })
     _apply_macro(cst, generator, "define_material", {
-        "name": sample.conductor_name,
+        "name": "dataset_conductor",
         "kind": "conductor",
-        "conductivity_s_per_m": sample.conductor_conductivity_s_per_m,
+        "conductivity_s_per_m": "sigma_cond",
     })
     _apply_macro(cst, generator, "create_component", {"component": "antenna"})
 
     _apply_macro(cst, generator, "create_substrate", {
         "component": "antenna",
         "name": "substrate",
-        "material": sample.substrate_name,
+        "material": "dataset_substrate",
         "origin_mm": {"x": 0.0, "y": 0.0, "z": 0.0},
-        "width_mm": geom.substrate_width_mm,
-        "length_mm": geom.substrate_length_mm,
-        "height_mm": sample.substrate_height_mm,
+        "width_mm": "sub_w",
+        "length_mm": "sub_l",
+        "height_mm": "sub_h",
     })
     _apply_macro(cst, generator, "create_ground_plane", {
         "component": "antenna",
         "name": "ground",
-        "material": sample.conductor_name,
-        "width_mm": geom.substrate_width_mm,
-        "length_mm": geom.substrate_length_mm,
+        "material": "dataset_conductor",
+        "width_mm": "sub_w",
+        "length_mm": "sub_l",
         "z_mm": 0.0,
-        "thickness_mm": geom.patch_height_mm,
+        "thickness_mm": "patch_h",
     })
 
-    patch_z = sample.substrate_height_mm
     _apply_macro(cst, generator, "create_patch", {
         "component": "antenna",
         "name": "patch",
-        "material": sample.conductor_name,
-        "center_mm": {"x": 0.0, "y": 0.0, "z": patch_z},
-        "width_mm": geom.patch_width_mm,
-        "length_mm": geom.patch_length_mm,
-        "thickness_mm": geom.patch_height_mm,
+        "material": "dataset_conductor",
+        "center_mm": {"x": 0.0, "y": 0.0, "z": "sub_h"},
+        "width_mm": "patch_w",
+        "length_mm": "patch_l",
+        "thickness_mm": "patch_h",
     })
 
-    patch_edge_y = -geom.patch_length_mm / 2.0
-    feed_end_y = geom.feed_offset_y_mm
-    feed_start_y = patch_edge_y - geom.feed_length_mm
+    # start_mm = substrate edge (lower y = more negative) so that Yrange is passed
+    # as (lower, upper) = ("-sub_l/2", "-patch_l/2") — this is required because
+    # _create_feedline passes start["y"] as y_min when values are parameter expressions.
     _apply_macro(cst, generator, "create_feedline", {
         "component": "antenna",
         "name": "feedline",
-        "material": sample.conductor_name,
-        "start_mm": {"x": 0.0, "y": feed_start_y, "z": patch_z},
-        "end_mm": {"x": 0.0, "y": feed_end_y, "z": patch_z},
-        "width_mm": geom.feed_width_mm,
-        "thickness_mm": geom.patch_height_mm,
+        "material": "dataset_conductor",
+        "start_mm": {"x": "feed_x", "y": "-sub_l/2", "z": "sub_h"},
+        "end_mm": {"x": "feed_x", "y": "-patch_l/2", "z": "sub_h"},
+        "width_mm": "feed_w",
+        "thickness_mm": "patch_h",
     })
 
     _apply_macro(cst, generator, "create_port", {
         "port_id": 1,
         "impedance_ohm": 50,
-        "p1_mm": {"x": 0.0, "y": feed_start_y, "z": patch_z + geom.patch_height_mm},
-        "p2_mm": {"x": 0.0, "y": feed_start_y, "z": 0.0},
-        "calculate_port_extension": True,
+        "p1_mm": {"x": "feed_x", "y": "-sub_l/2", "z": "sub_h"},
+        "p2_mm": {"x": "feed_x", "y": "-sub_l/2", "z": "patch_h"},
+        "calculate_port_extension": False,
     })
     _apply_macro(cst, generator, "set_boundary", {"boundary_type": "expanded_open", "padding_mm": 10})
     _apply_macro(cst, generator, "set_solver", {"solver_type": "time_domain", "mesh_cells_per_wavelength": 20})
     _apply_macro(cst, generator, "add_farfield_monitor", {
-        "frequency_ghz": sample.target_frequency_ghz,
-        "name": f"farfield_{project_name}",
+        "frequency_ghz": 2.4,
+        "monitor_value": "ff_freq_ghz",
+        "name": "farfield_dataset",
     })
+
+
+def _parameter_updates(sample: SampleInput, geom: PatchGeometry) -> dict[str, float]:
+    margin_ghz = max(0.3, sample.target_bandwidth_mhz / 1000.0)
+    return {
+        "sub_w": geom.substrate_width_mm,
+        "sub_l": geom.substrate_length_mm,
+        "sub_h": sample.substrate_height_mm,
+        "patch_w": geom.patch_width_mm,
+        "patch_l": geom.patch_length_mm,
+        "patch_h": geom.patch_height_mm,
+        "feed_w": geom.feed_width_mm,
+        "feed_x": geom.feed_offset_x_mm,
+        "freq_start_ghz": round(max(0.5, sample.target_frequency_ghz - margin_ghz), 4),
+        "freq_stop_ghz": round(sample.target_frequency_ghz + margin_ghz, 4),
+        "ff_freq_ghz": round(sample.target_frequency_ghz, 6),
+        "er_sub": sample.substrate_epsilon_r,
+        "tan_delta_sub": sample.substrate_loss_tangent,
+        "sigma_cond": sample.conductor_conductivity_s_per_m,
+    }
+
+
+def _apply_parameter_updates(cst: CSTApp, updates: dict[str, float]) -> None:
+    for name, value in updates.items():
+        if not cst.set_parameter(name, value, create_only=False):
+            raise RuntimeError(f"Failed to update CST parameter: {name}")
+    if not cst.rebuild_model(full_history=False):
+        raise RuntimeError("Failed to rebuild CST model after parameter updates")
 
 
 def _relative_to_root(path: str | None) -> str:
@@ -404,7 +460,6 @@ def _relative_to_root(path: str | None) -> str:
 
 def _run_single_sample(
     cst: CSTApp,
-    generator: VBAGenerator,
     sample_index: int,
     sample: SampleInput,
     geom: PatchGeometry,
@@ -412,7 +467,6 @@ def _run_single_sample(
     run_id = str(uuid.uuid4())
     timestamp_utc = datetime.now(timezone.utc).isoformat()
     destination_hint = f"{run_id}_farfield"
-    project_name = f"rect_patch_dataset_{sample_index:04d}_{run_id[:8]}"
     started = time.perf_counter()
     solver_status = "success"
     notes = ""
@@ -432,7 +486,7 @@ def _run_single_sample(
     actual_axial_ratio_db = None
 
     try:
-        _build_model(cst, generator, sample, geom, project_name)
+        _apply_parameter_updates(cst, _parameter_updates(sample, geom))
         if not cst.run_simulation(timeout_sec=1200):
             raise RuntimeError("CST solver failed or timed out")
 
@@ -473,12 +527,6 @@ def _run_single_sample(
         solver_status = "failed"
         notes = str(exc)
         logger.exception("Dataset sample %s failed", sample_index)
-    finally:
-        try:
-            cst.close_project(save=False)
-        except Exception:
-            pass
-
     simulation_time_sec = time.perf_counter() - started
     row = {
         "run_id": run_id,
@@ -536,6 +584,8 @@ def main() -> int:
     parser.add_argument("--baseline-only", action="store_true", help="Disable perturbations and log pure recipe geometry.")
     args = parser.parse_args()
 
+    signal.signal(signal.SIGINT, _sigint_handler)
+
     rng = random.Random(args.seed)
     output_path = Path(args.output)
 
@@ -545,13 +595,26 @@ def main() -> int:
 
     generator = VBAGenerator()
 
-    for index in range(args.samples):
-        sample = _sample_input(rng)
-        base_geom = _baseline_geometry(sample)
-        geom = base_geom if args.baseline_only else _perturb_geometry(base_geom, rng)
-        row = _run_single_sample(cst, generator, index, sample, geom)
-        _append_csv_row(row, output_path)
-        print(json.dumps(row, indent=2))
+    _build_model(cst, generator, project_name="rect_patch_feedback_working")
+
+    completed = 0
+    try:
+        for index in range(args.samples):
+            if _SHUTDOWN.is_set():
+                print(f"Stopping early after {completed} of {args.samples} samples.", flush=True)
+                break
+            sample = _sample_input(rng)
+            base_geom = _baseline_geometry(sample)
+            geom = base_geom if args.baseline_only else _perturb_geometry(base_geom, rng)
+            row = _run_single_sample(cst, index, sample, geom)
+            _append_csv_row(row, output_path)
+            print(json.dumps(row, indent=2))
+            completed += 1
+    finally:
+        try:
+            cst.close_project(save=False)
+        except Exception:
+            pass
 
     return 0
 
