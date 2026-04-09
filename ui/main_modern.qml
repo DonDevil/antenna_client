@@ -72,6 +72,32 @@ ApplicationWindow {
         return {"label": label, "value": displayValue(value)}
     }
 
+    function setComboValue(combo, value) {
+        if (value === undefined || value === null || value === "") {
+            return
+        }
+        var resolved = String(value)
+        for (var i = 0; i < combo.model.length; i++) {
+            if (String(combo.model[i]) === resolved) {
+                combo.currentIndex = i
+                return
+            }
+        }
+    }
+
+    function applyFamilyDefaults(family) {
+        var resolved = String(family || "")
+        if (resolved === "microstrip_patch") {
+            setComboValue(patchShapeCombo, "rectangular")
+            setComboValue(feedTypeCombo, "edge")
+            setComboValue(polarizationCombo, "linear")
+            return
+        }
+        setComboValue(patchShapeCombo, "auto")
+        setComboValue(feedTypeCombo, "auto")
+        setComboValue(polarizationCombo, "unspecified")
+    }
+
     function buildFieldsFromObject(data) {
         var fields = []
         if (!data) {
@@ -550,7 +576,17 @@ ApplicationWindow {
                     bandwidthField.text = String(data["bandwidth_mhz"])
                 }
                 if (data["antenna_family"] !== undefined) {
-                    antennaFamilyField.text = String(data["antenna_family"])
+                    setComboValue(antennaFamilyCombo, String(data["antenna_family"]))
+                    applyFamilyDefaults(antennaFamilyCombo.currentText)
+                }
+                if (data["patch_shape"] !== undefined) {
+                    setComboValue(patchShapeCombo, String(data["patch_shape"]))
+                }
+                if (data["feed_type"] !== undefined) {
+                    setComboValue(feedTypeCombo, String(data["feed_type"]))
+                }
+                if (data["polarization"] !== undefined) {
+                    setComboValue(polarizationCombo, String(data["polarization"]))
                 }
                 if (data["substrate_material"] !== undefined) {
                     substrateField.text = String(data["substrate_material"])
@@ -584,7 +620,11 @@ ApplicationWindow {
                 conductorField.text = String(design.conductor_material || "")
                 frequencyField.text = design.frequency_ghz !== undefined ? String(design.frequency_ghz) : ""
                 bandwidthField.text = design.bandwidth_mhz !== undefined ? String(design.bandwidth_mhz) : ""
-                antennaFamilyField.text = String(design.antenna_family || "")
+                setComboValue(antennaFamilyCombo, String(design.antenna_family || "amc_patch"))
+                applyFamilyDefaults(antennaFamilyCombo.currentText)
+                setComboValue(patchShapeCombo, String(design.patch_shape || ""))
+                setComboValue(feedTypeCombo, String(design.feed_type || ""))
+                setComboValue(polarizationCombo, String(design.polarization || ""))
 
                 chatModel.clear()
                 for (var i = 0; i < history.length; i++) {
@@ -1482,7 +1522,7 @@ ApplicationWindow {
                         x: 0
                         y: chatPage.height + 16
                         width: parent.width
-                        height: 290
+                        height: 340
                         color: panelBg
 
                         Text {
@@ -1537,20 +1577,50 @@ ApplicationWindow {
                             background: Rectangle { color: fieldBg }
                         }
 
-                        Text { x: 250; y: 130; text: "Antenna Family"; font.pixelSize: 38 * 0.45; color: "#111" }
-                        TextField {
-                            id: antennaFamilyField
-                            x: 410
+                        Text { x: 20; y: 130; text: "Antenna Family"; font.pixelSize: 35 * 0.45; color: "#111" }
+                        ComboBox {
+                            id: antennaFamilyCombo
+                            x: 210
                             y: 126
-                            width: 150
+                            width: 170
                             height: 24
-                            text: "Patch"
-                            background: Rectangle { color: fieldBg }
+                            model: ["amc_patch", "microstrip_patch", "wban_patch"]
+                            onCurrentTextChanged: applyFamilyDefaults(currentText)
+                        }
+
+                        Text { x: 410; y: 130; text: "Patch Shape"; font.pixelSize: 35 * 0.45; color: "#111" }
+                        ComboBox {
+                            id: patchShapeCombo
+                            x: 650
+                            y: 126
+                            width: 130
+                            height: 24
+                            model: ["auto", "rectangular", "circular"]
+                        }
+
+                        Text { x: 20; y: 172; text: "Feed Type"; font.pixelSize: 35 * 0.45; color: "#111" }
+                        ComboBox {
+                            id: feedTypeCombo
+                            x: 210
+                            y: 168
+                            width: 170
+                            height: 24
+                            model: ["auto", "edge", "inset", "coaxial"]
+                        }
+
+                        Text { x: 410; y: 172; text: "Polarization"; font.pixelSize: 35 * 0.45; color: "#111" }
+                        ComboBox {
+                            id: polarizationCombo
+                            x: 650
+                            y: 168
+                            width: 130
+                            height: 24
+                            model: ["linear", "circular", "dual", "unspecified"]
                         }
 
                         Rectangle {
                             x: 150
-                            y: 185
+                            y: 230
                             width: 180
                             height: 38
                             color: btnBg
@@ -1563,7 +1633,10 @@ ApplicationWindow {
                                         "conductor_material": conductorField.text,
                                         "frequency_ghz": Number(frequencyField.text),
                                         "bandwidth_mhz": Number(bandwidthField.text),
-                                        "antenna_family": antennaFamilyField.text
+                                        "antenna_family": antennaFamilyCombo.currentText,
+                                        "patch_shape": patchShapeCombo.currentText,
+                                        "feed_type": feedTypeCombo.currentText,
+                                        "polarization": polarizationCombo.currentText
                                     }
                                     designController.updateDesignParameter(JSON.stringify(payload))
                                     designController.startDesign()
@@ -1573,7 +1646,7 @@ ApplicationWindow {
 
                         Rectangle {
                             x: 460
-                            y: 185
+                            y: 230
                             width: 180
                             height: 38
                             color: btnBg
@@ -1585,7 +1658,8 @@ ApplicationWindow {
                                     conductorField.text = ""
                                     frequencyField.text = ""
                                     bandwidthField.text = ""
-                                    antennaFamilyField.text = ""
+                                    setComboValue(antennaFamilyCombo, "amc_patch")
+                                    applyFamilyDefaults(antennaFamilyCombo.currentText)
                                     chatInputField.text = ""
                                     chatModel.clear()
                                     patchWidthValue.text = ""
@@ -1606,7 +1680,7 @@ ApplicationWindow {
 
                         Text {
                             x: 20
-                            y: 246
+                            y: 294
                             text: root.statusText
                             font.pixelSize: 18 * 0.45
                             color: "#333"

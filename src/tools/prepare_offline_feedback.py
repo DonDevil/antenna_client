@@ -13,6 +13,17 @@ EXPORTS_DIR = ROOT / "artifacts" / "exports"
 LOG_FILE = ROOT / "logs" / "antenna_client.log"
 
 
+def _db_to_efficiency_fraction(value: Any) -> float | None:
+    if value is None:
+        return None
+    numeric = float(value)
+    if 0.0 <= numeric <= 1.0:
+        return numeric
+    if 0.0 < numeric <= 100.0:
+        return numeric / 100.0
+    return max(0.0, min(1.0, 10 ** (numeric / 10.0)))
+
+
 def _load_json(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
@@ -81,12 +92,18 @@ def build_payload(
     actual_return_loss_db = float(sparam_metrics.get("min_s11_db", -18.0) if sparam_metrics else -18.0)
 
     parsed_gain = None
+    actual_efficiency = None
+    actual_front_to_back_db = None
     if farfield_metrics:
         parsed_gain = (
             farfield_metrics.get("max_realized_gain_dbi")
             or farfield_metrics.get("max_gain_dbi")
             or farfield_metrics.get("theta_cut_peak_gain_dbi")
         )
+        actual_efficiency = _db_to_efficiency_fraction(
+            farfield_metrics.get("total_efficiency_db", farfield_metrics.get("radiation_efficiency_db"))
+        )
+        actual_front_to_back_db = farfield_metrics.get("front_to_back_ratio_db")
     actual_gain_dbi = float(parsed_gain if parsed_gain is not None else 0.0)
 
     payload = {
@@ -112,6 +129,10 @@ def build_payload(
             "current_distribution_ref": None,
         },
     }
+    if actual_efficiency is not None:
+        payload["actual_efficiency"] = float(actual_efficiency)
+    if actual_front_to_back_db is not None:
+        payload["actual_front_to_back_db"] = float(actual_front_to_back_db)
     return payload
 
 

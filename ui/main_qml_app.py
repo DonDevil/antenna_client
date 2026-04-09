@@ -19,6 +19,24 @@ from PySide6.QtWidgets import QApplication
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SRC_ROOT = PROJECT_ROOT / "src"
 
+FAMILY_QUALIFIER_DEFAULTS = {
+    "amc_patch": {
+        "patch_shape": "auto",
+        "feed_type": "auto",
+        "polarization": "unspecified",
+    },
+    "microstrip_patch": {
+        "patch_shape": "rectangular",
+        "feed_type": "edge",
+        "polarization": "linear",
+    },
+    "wban_patch": {
+        "patch_shape": "auto",
+        "feed_type": "auto",
+        "polarization": "unspecified",
+    },
+}
+
 for path in (SRC_ROOT, PROJECT_ROOT):
     path_str = str(path)
     if path_str not in sys.path:
@@ -38,6 +56,17 @@ from utils.chat_message_handler import (
 )
 from utils.connection_checker import ConnectionChecker
 from utils.validators import extract_antenna_family
+
+
+def _db_to_efficiency_fraction(value: Any) -> float | None:
+    if value is None:
+        return None
+    numeric = float(value)
+    if 0.0 <= numeric <= 1.0:
+        return numeric
+    if 0.0 < numeric <= 100.0:
+        return numeric / 100.0
+    return max(0.0, min(1.0, 10 ** (numeric / 10.0)))
 
 
 class _AsyncWorker(QThread):
@@ -77,6 +106,8 @@ class ConnectionCheckWorker(_AsyncWorker):
                 "comm_connected": bool(server_ok),
                 "ann_status": health.get("ann_status", "none"),
                 "llm_status": health.get("llm_status", "none"),
+                "ann_message": health.get("ann_message", ""),
+                "llm_message": health.get("llm_message", ""),
                 "server_message": server_msg,
                 "cst_message": cst_msg,
             }
@@ -148,7 +179,7 @@ class DesignController(QObject):
 
     @Slot(str)
     def handleCommand(self, command_text: str):
-        """Parse and execute chat commands like /help, /start, etc."""
+        """Parse and execute chat commands like /help, /simulate, etc."""
         parts = command_text.strip().split(maxsplit=1)
         cmd = parts[0].lower()
         args = parts[1] if len(parts) > 1 else ""
@@ -157,7 +188,7 @@ class DesignController(QObject):
             help_text = (
                 "Available commands:\n"
                 "/help - Show this help message\n"
-                "/start - Start a new antenna design optimization\n"
+                "/simulate - Start a new antenna design optimization\n"
                 "/clear - Clear chat and reset design\n"
                 "/reconnect - Manually reconnect to all services\n"
                 "/save_session <name> - Save current session with a name\n"
@@ -166,7 +197,7 @@ class DesignController(QObject):
             )
             self.chat_history.append({"sender": "System", "message": help_text})
             self.chatMessageReceived.emit("System", help_text)
-        elif cmd == "/start":
+        elif cmd == "/simulate":
             self.startDesign()
         elif cmd == "/clear":
             self.clearDesign()
@@ -800,8 +831,12 @@ class DesignController(QObject):
 
     def _build_design_specs(self) -> dict[str, Any]:
         family = self._normalize_antenna_family(self.current_design.get("antenna_family"))
+        defaults = FAMILY_QUALIFIER_DEFAULTS.get(family or "", FAMILY_QUALIFIER_DEFAULTS["amc_patch"])
         return {
             "antenna_family": family,
+            "patch_shape": str(self.current_design.get("patch_shape") or defaults["patch_shape"]),
+            "feed_type": str(self.current_design.get("feed_type") or defaults["feed_type"]),
+            "polarization": str(self.current_design.get("polarization") or defaults["polarization"]),
             "frequency_ghz": float(self.current_design.get("frequency_ghz") or 2.45),
             "bandwidth_mhz": float(self.current_design.get("bandwidth_mhz") or 100.0),
             "constraints": {
@@ -820,14 +855,22 @@ class DesignController(QObject):
             "",
         )
         family = self._normalize_antenna_family(self.current_design.get("antenna_family")) or "microstrip_patch"
+        defaults = FAMILY_QUALIFIER_DEFAULTS.get(family, FAMILY_QUALIFIER_DEFAULTS["amc_patch"])
         frequency = float(self.current_design.get("frequency_ghz") or 2.45)
         bandwidth = float(self.current_design.get("bandwidth_mhz") or 100.0)
+        patch_shape = str(self.current_design.get("patch_shape") or defaults["patch_shape"])
+        feed_type = str(self.current_design.get("feed_type") or defaults["feed_type"])
+        polarization = str(self.current_design.get("polarization") or defaults["polarization"])
         if last_user_message:
             return (
                 f"{last_user_message}\n\n"
-                f"Confirmed desktop fields: family={family}, frequency_ghz={frequency}, bandwidth_mhz={bandwidth}."
+                f"Confirmed desktop fields: family={family}, patch_shape={patch_shape}, feed_type={feed_type}, "
+                f"polarization={polarization}, frequency_ghz={frequency}, bandwidth_mhz={bandwidth}."
             )
-        return f"Design a {family} antenna at {frequency} GHz with {bandwidth} MHz bandwidth."
+        return (
+            f"Design a {patch_shape} {family} antenna with {feed_type} feed and {polarization} polarization "
+            f"at {frequency} GHz with {bandwidth} MHz bandwidth."
+        )
 
     def _normalize_antenna_family(self, family: Any) -> str | None:
         if family is None:
@@ -1426,11 +1469,13 @@ class DesignController(QObject):
         min_s11_db = s11_data.get("min_s11_db")
         center_val = float(center) if center is not None else None
         bw_mhz_val = float(bw_ghz) * 1000.0 if bw_ghz is not None else None
-        rl_val = abs(float(min_s11_db)) if min_s11_db is not None else None
+        rl_val = float(min_s11_db) if min_s11_db is not None else None
+        if rl_val is not None and rl_val > 0.0:
+            rl_val = -abs(rl_val)
 
         vswr_val = None
         if rl_val is not None:
-            gamma = 10 ** (-rl_val / 20.0)
+            gamma = 10 ** (-abs(rl_val) / 20.0)
             if gamma < 1.0:
                 vswr_val = (1.0 + gamma) / (1.0 - gamma)
                 if vswr_val > 25.0:
@@ -1489,13 +1534,18 @@ class DesignController(QObject):
         actual_return_loss_db = values.get("actual_return_loss_db")
         if actual_return_loss_db in (None, ""):
             s11 = cst_summary["s11_metrics"]
-            actual_return_loss_db = s11.get("return_loss_db") or 18.0
+            actual_return_loss_db = s11.get("return_loss_db") or -18.0
 
         s11_trace_path = cst_summary.get("s11_trace_path") or cst_summary.get("summary_metrics_path")
         summary_metrics_path = cst_summary.get("summary_metrics_path") or cst_summary.get("s11_trace_path")
         farfield_path = cst_summary.get("farfield_metrics_path") or cst_summary.get("farfield_source_path")
+        farfield_metrics = cst_summary.get("farfield_metrics") or {}
+        actual_efficiency = _db_to_efficiency_fraction(
+            farfield_metrics.get("total_efficiency_db", farfield_metrics.get("radiation_efficiency_db"))
+        )
+        actual_front_to_back_db = farfield_metrics.get("front_to_back_ratio_db")
 
-        return {
+        payload = {
             "schema_version": "client_feedback.v1",
             "session_id": self.session_id,
             "trace_id": self.trace_id,
@@ -1520,6 +1570,11 @@ class DesignController(QObject):
                 "current_distribution_ref": None,
             },
         }
+        if actual_efficiency is not None:
+            payload["actual_efficiency"] = float(actual_efficiency)
+        if actual_front_to_back_db is not None:
+            payload["actual_front_to_back_db"] = float(actual_front_to_back_db)
+        return payload
 
     @classmethod
     def _display_measurement(cls, value: Any, unit: str, decimals: int = 2) -> str:

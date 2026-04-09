@@ -41,14 +41,32 @@ def test_feedback_payload_includes_completion_requested(monkeypatch):
         "vswr": "1.48",
     }
 
-    monkeypatch.setattr(controller, "_load_latest_sparam_metrics", lambda: (None, None))
-    monkeypatch.setattr(controller, "_load_latest_farfield_metrics", lambda: (None, None))
+    monkeypatch.setattr(
+        controller,
+        "_build_cst_artifact_summary",
+        lambda: {
+            "s11_metrics": {
+                "return_loss_db": -18.5,
+            },
+            "farfield_metrics": {
+                "total_efficiency_db": -2.0,
+                "front_to_back_ratio_db": 14.0,
+            },
+            "s11_trace_path": None,
+            "summary_metrics_path": None,
+            "farfield_metrics_path": None,
+            "farfield_source_path": None,
+        },
+    )
 
     payload = controller._build_feedback_payload({}, completion_requested=True)
 
     assert payload["completion_requested"] is True
     assert payload["iteration_index"] == 2
     assert payload["session_id"] == "test-session"
+    assert payload["actual_return_loss_db"] == -18.5
+    assert round(payload["actual_efficiency"], 6) == round(10 ** (-2.0 / 10.0), 6)
+    assert payload["actual_front_to_back_db"] == 14.0
 
 
 def test_feedback_response_keeps_session_active_until_server_completion():
@@ -104,6 +122,47 @@ def test_restore_prefers_metadata_iteration_index():
     assert controller.iteration_index == 1
 
     controller.session_store.delete_session("test-session")
+
+
+def test_build_design_specs_includes_explicit_qualifiers():
+    controller = DesignController()
+    controller.current_design = {
+        "antenna_family": "microstrip_patch",
+        "patch_shape": "circular",
+        "feed_type": "coaxial",
+        "polarization": "circular",
+        "frequency_ghz": 5.8,
+        "bandwidth_mhz": 120.0,
+        "max_vswr": 2.2,
+        "target_gain_dbi": 6.5,
+    }
+
+    specs = controller._build_design_specs()
+
+    assert specs["antenna_family"] == "microstrip_patch"
+    assert specs["patch_shape"] == "circular"
+    assert specs["feed_type"] == "coaxial"
+    assert specs["polarization"] == "circular"
+    assert specs["constraints"]["max_vswr"] == 2.2
+    assert specs["constraints"]["target_gain_dbi"] == 6.5
+
+
+def test_build_pipeline_request_text_mentions_qualifiers():
+    controller = DesignController()
+    controller.current_design = {
+        "antenna_family": "microstrip_patch",
+        "patch_shape": "rectangular",
+        "feed_type": "edge",
+        "polarization": "linear",
+        "frequency_ghz": 2.45,
+        "bandwidth_mhz": 100.0,
+    }
+
+    text = controller._build_pipeline_request_text()
+
+    assert "patch_shape=rectangular" in text or "rectangular microstrip_patch antenna" in text
+    assert "feed_type=edge" in text or "edge feed" in text
+    assert "polarization=linear" in text or "linear polarization" in text
 
 
 def test_store_result_uses_reported_iteration():

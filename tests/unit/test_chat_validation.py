@@ -35,7 +35,15 @@ class _DesignPanelStub:
         self.export_requested = _SignalStub()
         self.feedback_requested = _SignalStub()
 
-    def set_spec_values(self, frequency_ghz=None, bandwidth_mhz=None, antenna_family=None) -> None:
+    def set_spec_values(
+        self,
+        frequency_ghz=None,
+        bandwidth_mhz=None,
+        antenna_family=None,
+        patch_shape=None,
+        feed_type=None,
+        polarization=None,
+    ) -> None:
         return None
 
     def get_specs(self) -> dict[str, Any]:

@@ -120,11 +120,7 @@ SUBSTRATE_LIBRARY = [
     {"name": "FR4", "epsilon_r": 4.4, "loss_tangent": 0.02},
 ]
 
-CONDUCTOR_LIBRARY = [
-    {"name": "Copper (annealed)", "conductivity_s_per_m": 5.8e7},
-    {"name": "Aluminum", "conductivity_s_per_m": 3.56e7},
-    {"name": "Silver", "conductivity_s_per_m": 6.3e7},
-]
+FIXED_CONDUCTOR = {"name": "Copper (annealed)", "conductivity_s_per_m": 5.8e7}
 
 SAFE_BOUNDS = {
     "target_frequency_ghz": (2.0, 7.0),
@@ -221,13 +217,12 @@ def _return_loss_to_vswr(return_loss_db: float | None) -> float | None:
 
 def _sample_input(rng: random.Random) -> SampleInput:
     substrate = rng.choice(SUBSTRATE_LIBRARY)
-    conductor = rng.choice(CONDUCTOR_LIBRARY)
     return SampleInput(
         substrate_name=str(substrate["name"]),
         substrate_epsilon_r=float(substrate["epsilon_r"]),
         substrate_loss_tangent=float(substrate["loss_tangent"]),
-        conductor_name=str(conductor["name"]),
-        conductor_conductivity_s_per_m=float(conductor["conductivity_s_per_m"]),
+        conductor_name=str(FIXED_CONDUCTOR["name"]),
+        conductor_conductivity_s_per_m=float(FIXED_CONDUCTOR["conductivity_s_per_m"]),
         substrate_height_mm=round(rng.uniform(0.8, 3.2), 3),
         target_frequency_ghz=round(rng.uniform(2.0, 7.0), 4),
         target_bandwidth_mhz=round(rng.uniform(30.0, 300.0), 3),

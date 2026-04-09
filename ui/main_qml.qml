@@ -25,6 +25,23 @@ ApplicationWindow {
     readonly property color textPrimary: "#f1f5f9"
     readonly property color textSecondary: "#cbd5e1"
     readonly property color textTertiary: "#94a3b8"
+    Component.onCompleted: applyLegacyFamilyDefaults()
+
+    function applyLegacyFamilyDefaults() {
+        if (!familyCombo || !patchShapeCombo || !feedTypeCombo || !polarizationCombo) {
+            return
+        }
+        var family = String(familyCombo.currentText)
+        if (family === "microstrip_patch") {
+            patchShapeCombo.currentIndex = 1 // rectangular
+            feedTypeCombo.currentIndex = 1 // edge
+            polarizationCombo.currentIndex = 0 // linear
+            return
+        }
+        patchShapeCombo.currentIndex = 0 // auto
+        feedTypeCombo.currentIndex = 0 // auto
+        polarizationCombo.currentIndex = 3 // unspecified
+    }
 
     // Top Bar
     Rectangle {
@@ -208,8 +225,9 @@ ApplicationWindow {
                         ComboBox {
                             id: familyCombo
                             Layout.fillWidth: true
-                            model: ["📡 Patch", "📌 Dipole", "🎯 Monopole", "📢 Horn", "🌀 Helical"]
+                            model: ["amc_patch", "microstrip_patch", "wban_patch"]
                             currentIndex: 0
+                            onCurrentTextChanged: applyLegacyFamilyDefaults()
 
                             background: Rectangle {
                                 color: root.surfaceColor
@@ -221,6 +239,138 @@ ApplicationWindow {
 
                             contentItem: Text {
                                 text: familyCombo.displayText
+                                color: root.textPrimary
+                                font.pixelSize: 12
+                                leftPadding: 8
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    height: 56
+                    color: root.surfaceLight
+                    border.color: root.borderColor
+                    border.width: 1
+                    radius: 8
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 12
+                        spacing: 4
+
+                        Text {
+                            text: "Patch Shape"
+                            font.pixelSize: 11
+                            font.weight: Font.Bold
+                            color: root.textSecondary
+                        }
+
+                        ComboBox {
+                            id: patchShapeCombo
+                            Layout.fillWidth: true
+                            model: ["auto", "rectangular", "circular"]
+                            currentIndex: 0
+
+                            background: Rectangle {
+                                color: root.surfaceColor
+                                border.color: root.primaryColor
+                                border.width: 1
+                                radius: 6
+                                opacity: 0.6
+                            }
+
+                            contentItem: Text {
+                                text: patchShapeCombo.displayText
+                                color: root.textPrimary
+                                font.pixelSize: 12
+                                leftPadding: 8
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    height: 56
+                    color: root.surfaceLight
+                    border.color: root.borderColor
+                    border.width: 1
+                    radius: 8
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 12
+                        spacing: 4
+
+                        Text {
+                            text: "Feed Type"
+                            font.pixelSize: 11
+                            font.weight: Font.Bold
+                            color: root.textSecondary
+                        }
+
+                        ComboBox {
+                            id: feedTypeCombo
+                            Layout.fillWidth: true
+                            model: ["auto", "edge", "inset", "coaxial"]
+                            currentIndex: 0
+
+                            background: Rectangle {
+                                color: root.surfaceColor
+                                border.color: root.primaryColor
+                                border.width: 1
+                                radius: 6
+                                opacity: 0.6
+                            }
+
+                            contentItem: Text {
+                                text: feedTypeCombo.displayText
+                                color: root.textPrimary
+                                font.pixelSize: 12
+                                leftPadding: 8
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    height: 56
+                    color: root.surfaceLight
+                    border.color: root.borderColor
+                    border.width: 1
+                    radius: 8
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 12
+                        spacing: 4
+
+                        Text {
+                            text: "Polarization"
+                            font.pixelSize: 11
+                            font.weight: Font.Bold
+                            color: root.textSecondary
+                        }
+
+                        ComboBox {
+                            id: polarizationCombo
+                            Layout.fillWidth: true
+                            model: ["linear", "circular", "dual", "unspecified"]
+                            currentIndex: 3
+
+                            background: Rectangle {
+                                color: root.surfaceColor
+                                border.color: root.primaryColor
+                                border.width: 1
+                                radius: 6
+                                opacity: 0.6
+                            }
+
+                            contentItem: Text {
+                                text: polarizationCombo.displayText
                                 color: root.textPrimary
                                 font.pixelSize: 12
                                 leftPadding: 8

@@ -14,6 +14,25 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Signal
 
 
+FAMILY_QUALIFIER_DEFAULTS = {
+    "amc_patch": {
+        "patch_shape": "auto",
+        "feed_type": "auto",
+        "polarization": "unspecified",
+    },
+    "microstrip_patch": {
+        "patch_shape": "rectangular",
+        "feed_type": "edge",
+        "polarization": "linear",
+    },
+    "wban_patch": {
+        "patch_shape": "auto",
+        "feed_type": "auto",
+        "polarization": "unspecified",
+    },
+}
+
+
 class DesignPanel(QWidget):
     """Widget for antenna design specifications"""
 
@@ -39,6 +58,18 @@ class DesignPanel(QWidget):
         self.antenna_combo = QComboBox()
         self.antenna_combo.addItems(["amc_patch", "microstrip_patch", "wban_patch"])
         specs_layout.addRow("Antenna Type:", self.antenna_combo)
+
+        self.patch_shape_combo = QComboBox()
+        self.patch_shape_combo.addItems(["auto", "rectangular", "circular"])
+        specs_layout.addRow("Patch Shape:", self.patch_shape_combo)
+
+        self.feed_type_combo = QComboBox()
+        self.feed_type_combo.addItems(["auto", "edge", "inset", "coaxial"])
+        specs_layout.addRow("Feed Type:", self.feed_type_combo)
+
+        self.polarization_combo = QComboBox()
+        self.polarization_combo.addItems(["linear", "circular", "dual", "unspecified"])
+        specs_layout.addRow("Polarization:", self.polarization_combo)
 
         # Chat behavior mode
         self.chat_mode_combo = QComboBox()
@@ -147,11 +178,16 @@ class DesignPanel(QWidget):
         buttons_layout.addWidget(export_btn)
         layout.addLayout(buttons_layout)
         
-        self.antenna_combo.currentTextChanged.connect(self._emit_design_changed)
+        self.antenna_combo.currentTextChanged.connect(self._on_antenna_family_changed)
+        self.patch_shape_combo.currentTextChanged.connect(self._emit_design_changed)
+        self.feed_type_combo.currentTextChanged.connect(self._emit_design_changed)
+        self.polarization_combo.currentTextChanged.connect(self._emit_design_changed)
         self.freq_spin.valueChanged.connect(self._emit_design_changed)
         self.bw_spin.valueChanged.connect(self._emit_design_changed)
         self.vswr_spin.valueChanged.connect(self._emit_design_changed)
         self.gain_spin.valueChanged.connect(self._emit_design_changed)
+
+        self._apply_family_defaults(self.antenna_combo.currentText())
 
         layout.addStretch()
     
@@ -167,6 +203,7 @@ class DesignPanel(QWidget):
         self.fb_bw_spin.setValue(0.0)
         self.fb_vswr_spin.setValue(1.5)
         self.fb_gain_spin.setValue(0.0)
+        self._apply_family_defaults(self.antenna_combo.currentText())
         self.set_session_metadata(None, None, "Idle", 0)
 
     def set_spec_values(
@@ -175,10 +212,16 @@ class DesignPanel(QWidget):
         frequency_ghz: float | None = None,
         bandwidth_mhz: float | None = None,
         antenna_family: str | None = None,
+        patch_shape: str | None = None,
+        feed_type: str | None = None,
+        polarization: str | None = None,
     ) -> None:
         """Update fields from parsed chat or session state."""
         if antenna_family and antenna_family in [self.antenna_combo.itemText(i) for i in range(self.antenna_combo.count())]:
             self.antenna_combo.setCurrentText(antenna_family)
+        self._set_combo_text(self.patch_shape_combo, patch_shape)
+        self._set_combo_text(self.feed_type_combo, feed_type)
+        self._set_combo_text(self.polarization_combo, polarization)
         if frequency_ghz is not None:
             self.freq_spin.setValue(max(self.freq_spin.minimum(), min(self.freq_spin.maximum(), float(frequency_ghz))))
         if bandwidth_mhz is not None:
@@ -231,6 +274,26 @@ class DesignPanel(QWidget):
     def _emit_feedback_requested(self):
         self.feedback_requested.emit(self.get_feedback_values())
 
+    def _on_antenna_family_changed(self, antenna_family: str) -> None:
+        self._apply_family_defaults(antenna_family)
+        self._emit_design_changed()
+
+    def _apply_family_defaults(self, antenna_family: str) -> None:
+        defaults = FAMILY_QUALIFIER_DEFAULTS.get(antenna_family, FAMILY_QUALIFIER_DEFAULTS["amc_patch"])
+        self._set_combo_text(self.patch_shape_combo, defaults["patch_shape"])
+        self._set_combo_text(self.feed_type_combo, defaults["feed_type"])
+        self._set_combo_text(self.polarization_combo, defaults["polarization"])
+
+    @staticmethod
+    def _set_combo_text(combo: QComboBox, value: str | None) -> None:
+        if value is None:
+            return
+        resolved = str(value).strip()
+        if not resolved:
+            return
+        if combo.findText(resolved) >= 0:
+            combo.setCurrentText(resolved)
+
     def _emit_design_changed(self):
         self.design_changed.emit(self.get_specs())
     
@@ -242,6 +305,9 @@ class DesignPanel(QWidget):
         """
         return {
             "antenna_family": self.antenna_combo.currentText(),
+            "patch_shape": self.patch_shape_combo.currentText(),
+            "feed_type": self.feed_type_combo.currentText(),
+            "polarization": self.polarization_combo.currentText(),
             "frequency_ghz": self.freq_spin.value(),
             "bandwidth_mhz": self.bw_spin.value(),
             "constraints": {

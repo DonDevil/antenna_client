@@ -47,7 +47,14 @@ class ConnectionChecker:
                     if status == "ok":
                         ann_status = result.get("ann_status", "unknown")
                         llm_status = result.get("llm_status", "unknown")
-                        status_msg = f"✅ Server OK (ANN: {ann_status}, LLM: {llm_status})"
+                        detail_parts = [f"ANN: {ann_status}", f"LLM: {llm_status}"]
+                        ann_message = str(result.get("ann_message") or "").strip()
+                        llm_message = str(result.get("llm_message") or "").strip()
+                        if ann_message:
+                            detail_parts.append(f"ann_msg={ann_message}")
+                        if llm_message:
+                            detail_parts.append(f"llm_msg={llm_message}")
+                        status_msg = "✅ Server OK (" + ", ".join(detail_parts) + ")"
                         return True, status_msg, result
                     else:
                         status_msg = f"⚠️ Server status: {status}"

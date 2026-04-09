@@ -16,6 +16,32 @@ def test_optimize_request_creation():
     assert request.target_spec["frequency_ghz"] == 2.4
     assert request.target_spec["bandwidth_mhz"] == 50.0
     assert request.target_spec["antenna_family"] == "microstrip_patch"
+    assert request.target_spec["patch_shape"] == "rectangular"
+    assert request.target_spec["feed_type"] == "edge"
+    assert request.target_spec["polarization"] == "linear"
+    assert request.optimization_policy["acceptance"]["minimum_return_loss_db"] == -10.0
+
+
+def test_optimize_request_preserves_explicit_target_qualifiers_and_constraints():
+    request = RequestBuilder().build_optimize_request(
+        user_text="Design a circular patch antenna at 5.8 GHz",
+        design_specs={
+            "frequency_ghz": 5.8,
+            "bandwidth_mhz": 120.0,
+            "antenna_family": "microstrip_patch",
+            "patch_shape": "circular",
+            "feed_type": "coaxial",
+            "polarization": "circular",
+            "constraints": {
+                "min_return_loss_db": -15.0,
+            },
+        },
+    )
+
+    assert request.target_spec["patch_shape"] == "circular"
+    assert request.target_spec["feed_type"] == "coaxial"
+    assert request.target_spec["polarization"] == "circular"
+    assert request.optimization_policy["acceptance"]["minimum_return_loss_db"] == -15.0
 
 
 def test_optimize_response_parsing():

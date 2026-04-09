@@ -1,6 +1,6 @@
 {
   "server": {
-    "base_url": "http://192.168.234.38:8000",
+    "base_url": "http://192.168.29.147:8000",
     "timeout_sec": 60,
     "retry_count": 3,
     "retry_backoff": 2

@@ -32,6 +32,17 @@ logger = get_logger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _db_to_efficiency_fraction(value: Any) -> float | None:
+    if value is None:
+        return None
+    numeric = float(value)
+    if 0.0 <= numeric <= 1.0:
+        return numeric
+    if 0.0 < numeric <= 100.0:
+        return numeric / 100.0
+    return max(0.0, min(1.0, 10 ** (numeric / 10.0)))
+
+
 class _BaseWorker(QThread):
     error_occurred = Signal(str)
 
@@ -283,6 +294,9 @@ class ChatMessageHandler:
             frequency_ghz=self.requirements.get("frequency_ghz"),
             bandwidth_mhz=self.requirements.get("bandwidth_mhz"),
             antenna_family=self.requirements.get("antenna_family"),
+            patch_shape=self.requirements.get("patch_shape"),
+            feed_type=self.requirements.get("feed_type"),
+            polarization=self.requirements.get("polarization"),
         )
         response_text = payload.get("assistant_message", "Requirements updated.")
         logger.info(f"Chat response received: {response_text}")
@@ -450,7 +464,7 @@ class ChatMessageHandler:
             if bw_candidate is not None
             else feedback_values["actual_bandwidth_mhz"]
         )
-        actual_return_loss_db = float(rl_candidate if rl_candidate is not None else 18.0)
+        actual_return_loss_db = float(rl_candidate if rl_candidate is not None else -18.0)
 
         # Keep values schema-safe before sending to server.
         if actual_center_frequency_ghz <= 0 or actual_bandwidth_mhz < 0:
@@ -461,12 +475,18 @@ class ChatMessageHandler:
             return
 
         parsed_gain = None
+        actual_efficiency = None
+        actual_front_to_back_db = None
         if farfield_metrics:
             parsed_gain = farfield_metrics.get("max_realized_gain_dbi")
             if parsed_gain is None:
                 parsed_gain = farfield_metrics.get("max_gain_dbi")
             if parsed_gain is None:
                 parsed_gain = farfield_metrics.get("theta_cut_peak_gain_dbi")
+            actual_efficiency = _db_to_efficiency_fraction(
+                farfield_metrics.get("total_efficiency_db", farfield_metrics.get("radiation_efficiency_db"))
+            )
+            actual_front_to_back_db = farfield_metrics.get("front_to_back_ratio_db")
         actual_gain_dbi = float(parsed_gain if parsed_gain is not None else feedback_values["actual_gain_dbi"])
 
         actual_vswr = feedback_values["actual_vswr"]
@@ -503,6 +523,10 @@ class ChatMessageHandler:
                 "current_distribution_ref": None,
             },
         }
+        if actual_efficiency is not None:
+            payload["actual_efficiency"] = float(actual_efficiency)
+        if actual_front_to_back_db is not None:
+            payload["actual_front_to_back_db"] = float(actual_front_to_back_db)
 
         self._show_status("Submitting CST feedback to server...")
         self.current_worker = FeedbackRequestWorker(payload)
@@ -932,13 +956,15 @@ class ChatMessageHandler:
         center_val = float(center) if center is not None else None
         bw_mhz_val = float(bw_ghz) * 1000.0 if bw_ghz is not None else None
         min_s11_val = float(min_s11_db) if min_s11_db is not None else None
-        rl_val = abs(min_s11_val) if min_s11_val is not None else None
-        if rl_val is not None and rl_val < 0.1:
+        rl_val = min_s11_val if min_s11_val is not None else None
+        if rl_val is not None and rl_val > 0.0:
+            rl_val = -abs(rl_val)
+        if rl_val is not None and abs(rl_val) < 0.1:
             rl_val = None
 
         vswr_val = None
         if rl_val is not None:
-            gamma = 10 ** (-rl_val / 20.0)
+            gamma = 10 ** (-abs(rl_val) / 20.0)
             if gamma < 1.0:
                 vswr_val = (1.0 + gamma) / (1.0 - gamma)
                 if vswr_val > 25.0:

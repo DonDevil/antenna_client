@@ -27,6 +27,24 @@ FAMILY_DEFAULT_SUBSTRATES = {
     "wban_patch": ["Rogers RO3003"],
 }
 
+FAMILY_TARGET_DEFAULTS = {
+    "amc_patch": {
+        "patch_shape": "auto",
+        "feed_type": "auto",
+        "polarization": "unspecified",
+    },
+    "microstrip_patch": {
+        "patch_shape": "rectangular",
+        "feed_type": "edge",
+        "polarization": "linear",
+    },
+    "wban_patch": {
+        "patch_shape": "auto",
+        "feed_type": "auto",
+        "polarization": "unspecified",
+    },
+}
+
 
 class RequestBuilder:
     """Construct optimization requests matching antenna_server schema"""
@@ -67,7 +85,7 @@ class RequestBuilder:
                 resolved_specs["antenna_family"] = inferred_family
 
         target_spec = self._build_target_spec(freq, bw, resolved_specs)
-        design_constraints = self._build_design_constraints(target_spec["antenna_family"])
+        design_constraints = self._build_design_constraints(target_spec["antenna_family"], resolved_specs)
         optimization_policy = self._build_optimization_policy(target_spec, resolved_specs)
         runtime_preferences = self._build_runtime_preferences()
 
@@ -92,34 +110,51 @@ class RequestBuilder:
         
         Required: frequency_ghz, bandwidth_mhz, antenna_family
         """
-        constraints = (design_specs or {}).get("constraints", {}) if design_specs else {}
-        antenna_family = (design_specs or {}).get("antenna_family") or extract_antenna_family((design_specs or {}).get("user_request", "") or "")
+        resolved_specs = design_specs or {}
+        constraints = resolved_specs.get("constraints", {}) if design_specs else {}
+        antenna_family = resolved_specs.get("antenna_family") or extract_antenna_family(resolved_specs.get("user_request", "") or "")
         if not antenna_family and design_specs and isinstance(design_specs.get("antenna_family"), str):
             antenna_family = design_specs["antenna_family"]
         if not antenna_family:
-            antenna_family = extract_antenna_family((design_specs or {}).get("raw_text", "") or "")
+            antenna_family = extract_antenna_family(resolved_specs.get("raw_text", "") or "")
         if not antenna_family:
-            antenna_family = extract_antenna_family((design_specs or {}).get("summary", "") or "")
+            antenna_family = extract_antenna_family(resolved_specs.get("summary", "") or "")
         if not antenna_family:
             antenna_family = "amc_patch"
 
         spec = {
-            "frequency_ghz": float((design_specs or {}).get("frequency_ghz") or frequency or 2.4),
-            "bandwidth_mhz": float((design_specs or {}).get("bandwidth_mhz") or bandwidth or 100.0),
+            "frequency_ghz": float(resolved_specs.get("frequency_ghz") or frequency or 2.4),
+            "bandwidth_mhz": float(resolved_specs.get("bandwidth_mhz") or bandwidth or 100.0),
             "antenna_family": antenna_family,
         }
 
+        spec.update(FAMILY_TARGET_DEFAULTS.get(antenna_family, FAMILY_TARGET_DEFAULTS["amc_patch"]))
+        for field_name in ("patch_shape", "feed_type", "polarization"):
+            field_value = resolved_specs.get(field_name)
+            if field_value in (None, ""):
+                field_value = constraints.get(field_name)
+            if field_value not in (None, ""):
+                spec[field_name] = str(field_value)
+
         return spec
     
-    def _build_design_constraints(self, antenna_family: str) -> Dict[str, Any]:
+    def _build_design_constraints(self, antenna_family: str, design_specs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Build design constraints - matches antenna_server schema
         
         Required: allowed_materials, allowed_substrates
         Uses actual material names from antenna_server capabilities
         """
+        resolved_specs = design_specs or {}
+        constraints = resolved_specs.get("constraints", {}) if design_specs else {}
+        allowed_materials = resolved_specs.get("allowed_materials") or constraints.get("allowed_materials") or ["Copper (annealed)"]
+        allowed_substrates = (
+            resolved_specs.get("allowed_substrates")
+            or constraints.get("allowed_substrates")
+            or FAMILY_DEFAULT_SUBSTRATES.get(antenna_family, ["FR-4 (lossy)"])
+        )
         return {
-            "allowed_materials": ["Copper (annealed)"],
-            "allowed_substrates": FAMILY_DEFAULT_SUBSTRATES.get(antenna_family, ["FR-4 (lossy)"])
+            "allowed_materials": list(allowed_materials),
+            "allowed_substrates": list(allowed_substrates),
         }
     
     def _build_optimization_policy(self, target_spec: Dict[str, Any], design_specs: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -137,6 +172,7 @@ class RequestBuilder:
                 "minimum_bandwidth_mhz": float(target_spec["bandwidth_mhz"]),
                 "maximum_vswr": float(constraints.get("max_vswr", 2.0)),
                 "minimum_gain_dbi": float(constraints.get("target_gain_dbi", 0.0)),
+                "minimum_return_loss_db": -abs(float(constraints.get("minimum_return_loss_db", constraints.get("min_return_loss_db", -10.0)))),
             },
             "fallback_behavior": "best_effort"
         }
