@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional
 
 from pydantic import BaseModel
 
+from utils.material_resolver import resolve_materials
 from utils.validators import extract_antenna_family, extract_frequency_bandwidth
 
 
@@ -162,47 +163,17 @@ class RequestBuilder:
     
     def _build_design_constraints(self, antenna_family: str, design_specs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Build design constraints - matches antenna_server schema
-        
-        Required: allowed_materials, allowed_substrates
-        Uses actual material names from antenna_server capabilities
+
+        Delegates material resolution to the single ``resolve_materials`` function
+        so there is exactly one fallback chain for the entire client.
         """
-        resolved_specs = design_specs or {}
-        constraints = resolved_specs.get("constraints", {}) if design_specs else {}
-
-        explicit_conductor = self._first_string(
-            resolved_specs.get("conductor_material"),
-            resolved_specs.get("conductor_name"),
-            constraints.get("conductor_material"),
-            constraints.get("conductor_name"),
+        choice = resolve_materials(
+            design_specs=design_specs,
+            antenna_family=antenna_family,
         )
-        explicit_substrate = self._first_string(
-            resolved_specs.get("substrate_material"),
-            resolved_specs.get("substrate_name"),
-            constraints.get("substrate_material"),
-            constraints.get("substrate_name"),
-        )
-
-        allowed_materials = (
-            self._coerce_string_list(resolved_specs.get("allowed_materials"))
-            or self._coerce_string_list(constraints.get("allowed_materials"))
-        )
-        if not allowed_materials and explicit_conductor:
-            allowed_materials = [explicit_conductor]
-        if not allowed_materials:
-            allowed_materials = ["Copper (annealed)"]
-
-        allowed_substrates = (
-            self._coerce_string_list(resolved_specs.get("allowed_substrates"))
-            or self._coerce_string_list(constraints.get("allowed_substrates"))
-        )
-        if not allowed_substrates and explicit_substrate:
-            allowed_substrates = [explicit_substrate]
-        if not allowed_substrates:
-            allowed_substrates = list(FAMILY_DEFAULT_SUBSTRATES.get(antenna_family, ["FR-4 (lossy)"]))
-
         return {
-            "allowed_materials": allowed_materials,
-            "allowed_substrates": allowed_substrates,
+            "allowed_materials": choice.allowed_materials,
+            "allowed_substrates": choice.allowed_substrates,
         }
     
     def _build_optimization_policy(self, target_spec: Dict[str, Any], design_specs: Optional[Dict[str, Any]]) -> Dict[str, Any]:

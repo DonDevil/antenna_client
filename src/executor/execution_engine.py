@@ -12,6 +12,12 @@ from cst_client.cst_app import CSTApp
 from executor.command_parser import CommandPackage, Command
 from executor.vba_generator import VBAGenerator
 from utils.logger import get_logger
+from utils.material_resolver import (
+    resolve_materials,
+    normalize_material_name,
+    FALLBACK_CONDUCTOR,
+    FALLBACK_SUBSTRATE,
+)
 
 
 logger = get_logger(__name__)
@@ -227,92 +233,49 @@ class ExecutionEngine:
         command_params: Dict[str, Any],
         family_params: Dict[str, Any],
     ) -> tuple[str, str]:
-        substrate_candidates: List[str] = []
-        conductor_candidates: List[str] = []
+        """Read materials from the pre-stamped package or fall back to the resolver.
 
-        def _add_unique(target: List[str], value: Any) -> None:
-            text = self._first_string(value)
-            if text and text not in target:
-                target.append(text)
-
-        # 1) Explicit command-level override from server command params.
-        _add_unique(substrate_candidates, command_params.get("substrate_material"))
-        _add_unique(substrate_candidates, command_params.get("substrate_name"))
-        _add_unique(substrate_candidates, command_params.get("dielectric_material"))
-        _add_unique(conductor_candidates, command_params.get("conductor_material"))
-        _add_unique(conductor_candidates, command_params.get("conductor_name"))
-        _add_unique(conductor_candidates, command_params.get("metal_material"))
-
-        # 2) Explicit base-geometry command materials from the package should win.
-        for pkg_cmd in list(getattr(package, "commands", []) or []):
-            cmd_name = str(getattr(pkg_cmd, "command", "") or "").strip().lower()
-            params = getattr(pkg_cmd, "params", {})
-            if not isinstance(params, dict):
-                continue
-            material = params.get("material")
-            solid_name = str(params.get("name", "") or "").strip().lower()
-
-            if cmd_name == "create_substrate":
-                _add_unique(substrate_candidates, material)
-            elif cmd_name in {"create_ground_plane", "create_patch", "create_feedline"}:
-                _add_unique(conductor_candidates, material)
-            elif cmd_name == "define_brick":
-                if solid_name == "substrate":
-                    _add_unique(substrate_candidates, material)
-                elif solid_name in {"ground", "patch", "feed"}:
-                    _add_unique(conductor_candidates, material)
-
+        ``stamp_materials_on_package`` (called before execution) writes the
+        resolved conductor/substrate into ``design_recipe``. This method simply
+        reads those values. If they are somehow missing (e.g. a raw package
+        without stamping), it falls back to ``resolve_materials`` as a safety net.
+        """
         extras = self._get_package_extras(package)
-        design_recipe = extras.get("design_recipe") if isinstance(extras.get("design_recipe"), dict) else {}
-        request_payload = extras.get("request") if isinstance(extras.get("request"), dict) else {}
-        design_constraints = (
-            request_payload.get("design_constraints") if isinstance(request_payload.get("design_constraints"), dict) else {}
+        resolved = extras.get("_resolved_materials") if isinstance(extras.get("_resolved_materials"), dict) else {}
+        recipe = extras.get("design_recipe") if isinstance(extras.get("design_recipe"), dict) else {}
+
+        substrate = (
+            self._first_string(
+                resolved.get("substrate"),
+                command_params.get("substrate_material"),
+                command_params.get("substrate_name"),
+                recipe.get("substrate_material"),
+                recipe.get("substrate_name"),
+                family_params.get("substrate_material"),
+                family_params.get("substrate_name"),
+            )
+            or normalize_material_name(FALLBACK_SUBSTRATE)
+        )
+        conductor = (
+            self._first_string(
+                resolved.get("conductor"),
+                command_params.get("conductor_material"),
+                command_params.get("conductor_name"),
+                recipe.get("conductor_material"),
+                recipe.get("conductor_name"),
+                family_params.get("conductor_material"),
+                family_params.get("conductor_name"),
+            )
+            or normalize_material_name(FALLBACK_CONDUCTOR)
         )
 
-        # 3) Request constraints are next-best source when explicit command materials are absent.
-        _add_unique(substrate_candidates, self._first_from_list(design_constraints.get("allowed_substrates")))
-        _add_unique(conductor_candidates, self._first_from_list(design_constraints.get("allowed_materials")))
+        substrate = normalize_material_name(substrate)
+        conductor = normalize_material_name(conductor)
 
-        # 4) Runtime geometry context from already executed commands.
-        substrate_geom = self._geometry_context.get("substrate") if isinstance(self._geometry_context.get("substrate"), dict) else {}
-        _add_unique(substrate_candidates, substrate_geom.get("material"))
-
-        patch_geom = self._geometry_context.get("patch") if isinstance(self._geometry_context.get("patch"), dict) else {}
-        ground_geom = self._geometry_context.get("ground") if isinstance(self._geometry_context.get("ground"), dict) else {}
-        feed_geom = self._geometry_context.get("feed") if isinstance(self._geometry_context.get("feed"), dict) else {}
-        _add_unique(conductor_candidates, patch_geom.get("material"))
-        _add_unique(conductor_candidates, ground_geom.get("material"))
-        _add_unique(conductor_candidates, feed_geom.get("material"))
-
-        # 5) Server-side family metadata as fallback only.
-        _add_unique(substrate_candidates, family_params.get("substrate_material"))
-        _add_unique(substrate_candidates, family_params.get("substrate_name"))
-        _add_unique(conductor_candidates, family_params.get("conductor_material"))
-        _add_unique(conductor_candidates, family_params.get("conductor_name"))
-
-        _add_unique(substrate_candidates, design_recipe.get("substrate_material"))
-        _add_unique(substrate_candidates, design_recipe.get("substrate_name"))
-        _add_unique(conductor_candidates, design_recipe.get("conductor_material"))
-        _add_unique(conductor_candidates, design_recipe.get("conductor_name"))
-
-        # 6) Defined material catalog tracked from define_material commands.
-        by_kind = self._material_context.get("by_kind") if isinstance(self._material_context.get("by_kind"), dict) else {}
-        _add_unique(substrate_candidates, by_kind.get("substrate"))
-        _add_unique(conductor_candidates, by_kind.get("conductor"))
-
-        defined_materials = self._material_context.get("defined") if isinstance(self._material_context.get("defined"), list) else []
-        if defined_materials:
-            if not substrate_candidates:
-                _add_unique(substrate_candidates, defined_materials[0])
-            if not conductor_candidates and len(defined_materials) > 1:
-                _add_unique(conductor_candidates, defined_materials[1])
-
-        substrate_material = substrate_candidates[0] if substrate_candidates else "FR-4_(lossy)"
-        conductor_material = conductor_candidates[0] if conductor_candidates else "Copper_(annealed)"
-
-        self.artifacts["amc_substrate_material"] = substrate_material
-        self.artifacts["amc_conductor_material"] = conductor_material
-        return substrate_material, conductor_material
+        logger.info("AMC materials: substrate=%s, conductor=%s", substrate, conductor)
+        self.artifacts["amc_substrate_material"] = substrate
+        self.artifacts["amc_conductor_material"] = conductor
+        return substrate, conductor
 
     def _extract_base_dims_for_amc(self, package: CommandPackage) -> Dict[str, float]:
         dims = dict(getattr(package, "predicted_dimensions", {}) or {})

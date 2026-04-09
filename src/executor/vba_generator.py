@@ -830,6 +830,16 @@ End With
     def _set_frequency_range(self, parameters: Dict[str, Any]) -> str:
         return f"Solver.FrequencyRange \"{parameters['start_ghz']}\", \"{parameters['stop_ghz']}\""
 
+    # Known conductivities (S/m) for the generic Lossy-metal template when
+    # the server sends a conductor name without explicit conductivity_s_per_m.
+    _KNOWN_CONDUCTIVITIES: Dict[str, float] = {
+        "copper": 5.8e7,
+        "copper annealed": 5.8e7,
+        "gold": 4.561e7,
+        "silver": 6.3012e7,
+        "aluminum": 3.56e7,
+    }
+
     def _define_material(self, parameters: Dict[str, Any]) -> str:
         raw_name = str(parameters["name"]).strip()
         name = self._sanitize_cst_name(raw_name)
@@ -839,7 +849,15 @@ End With
             return preset
 
         if kind in {"conductor", "metal", "lossy metal", "lossy_metal"}:
-            conductivity = parameters.get("conductivity_s_per_m", 5.8e7)
+            conductivity = parameters.get("conductivity_s_per_m")
+            if conductivity is None:
+                key = self._material_key(raw_name)
+                conductivity = self._KNOWN_CONDUCTIVITIES.get(key, 5.8e7)
+                if key not in self._KNOWN_CONDUCTIVITIES:
+                    logger.warning(
+                        "No preset or known conductivity for '%s'; using Copper default 5.8e7 S/m",
+                        raw_name,
+                    )
             color = parameters.get("color_rgb", [1, 1, 0])
             if not isinstance(color, (list, tuple)) or len(color) != 3:
                 color = [1, 1, 0]
