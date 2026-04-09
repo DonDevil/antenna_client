@@ -54,6 +54,7 @@ class ExecutionEngine:
         self.artifacts: Dict[str, Any] = {}
         self._scoped_hint_cache: Dict[str, str] = {}
         self._geometry_context: Dict[str, Dict[str, Any]] = {}
+        self._parameter_context: Dict[str, Any] = {}
         logger.info("ExecutionEngine initialized")
     
     async def execute_command_package(self, package: CommandPackage) -> List[ExecutionResult]:
@@ -77,6 +78,7 @@ class ExecutionEngine:
         }
         self._scoped_hint_cache = {}
         self._geometry_context = {}
+        self._parameter_context = {}
         self.dry_run = not self.cst_app.connect()
         logger.info(f"Starting execution of package with {len(package.commands)} commands")
         
@@ -146,6 +148,306 @@ class ExecutionEngine:
             return float(value)
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _is_number(value: Any) -> bool:
+        try:
+            float(value)
+            return True
+        except (TypeError, ValueError):
+            return False
+
+    def _get_package_extras(self, package: CommandPackage) -> Dict[str, Any]:
+        extras = getattr(package, "model_extra", None)
+        if isinstance(extras, dict):
+            return extras
+        extras = getattr(package, "__pydantic_extra__", None)
+        if isinstance(extras, dict):
+            return extras
+        return {}
+
+    def _extract_server_amc_family_params(self, package: CommandPackage) -> Dict[str, Any]:
+        extras = self._get_package_extras(package)
+        merged: Dict[str, Any] = {}
+        design_recipe = extras.get("design_recipe")
+        if isinstance(design_recipe, dict):
+            family_params = design_recipe.get("family_parameters")
+            if isinstance(family_params, dict):
+                merged.update(family_params)
+        package_family_params = extras.get("family_parameters")
+        if isinstance(package_family_params, dict):
+            merged.update(package_family_params)
+        return merged
+
+    def _extract_base_dims_for_amc(self, package: CommandPackage) -> Dict[str, float]:
+        dims = dict(getattr(package, "predicted_dimensions", {}) or {})
+        params = dict(self._parameter_context)
+
+        px = float(params.get("px", dims.get("patch_width_mm", 37.0)))
+        py = float(params.get("py", dims.get("patch_length_mm", 29.0)))
+        sx = float(params.get("sx", dims.get("substrate_width_mm", 55.0)))
+        sy = float(params.get("sy", dims.get("substrate_length_mm", 47.0)))
+        h_sub = float(params.get("h_sub", dims.get("substrate_height_mm", 3.0)))
+        t_cu = float(params.get("t_cu", dims.get("patch_height_mm", 0.035)))
+
+        f0 = 2.45
+        predicted_metrics = getattr(package, "predicted_metrics", {}) or {}
+        center = predicted_metrics.get("center_frequency_ghz") if isinstance(predicted_metrics, dict) else None
+        if self._is_number(center):
+            f0 = float(center)
+
+        return {
+            "px": px,
+            "py": py,
+            "sx": sx,
+            "sy": sy,
+            "h_sub": h_sub,
+            "t_cu": t_cu,
+            "f0": max(0.1, f0),
+        }
+
+    def _build_amc_commands_heuristic(self, base_dims: Dict[str, float], component: str) -> List[Dict[str, Any]]:
+        px = base_dims["px"]
+        py = base_dims["py"]
+        sx = base_dims["sx"]
+        sy = base_dims["sy"]
+        h_sub = base_dims["h_sub"]
+        t_cu = base_dims["t_cu"]
+        f0 = max(0.1, base_dims["f0"])
+
+        wavelength_mm = 300.0 / f0
+        period_min = 0.14 * wavelength_mm
+        period_max = 0.24 * wavelength_mm
+        period_seed = 0.65 * max(px, py)
+        amc_period = max(period_min, min(period_seed, period_max))
+        amc_cell = 0.90 * amc_period
+        amc_gap = amc_period - amc_cell
+        amc_air_gap = max(2.0, 0.02 * wavelength_mm)
+        amc_sub_h = max(1.0, 0.5 * h_sub)
+
+        nx_seed = int(round(sx / amc_period))
+        ny_seed = int(round(sy / amc_period))
+        amc_nx = max(5, min(11, nx_seed if nx_seed > 0 else 7))
+        amc_ny = max(5, min(11, ny_seed if ny_seed > 0 else 7))
+        if amc_nx % 2 == 0:
+            amc_nx += 1
+        if amc_ny % 2 == 0:
+            amc_ny += 1
+
+        return self._materialize_amc_brick_commands(
+            component=component,
+            t_cu=t_cu,
+            amc_period=amc_period,
+            amc_cell=amc_cell,
+            amc_gap=amc_gap,
+            amc_air_gap=amc_air_gap,
+            amc_sub_h=amc_sub_h,
+            amc_nx=amc_nx,
+            amc_ny=amc_ny,
+        )
+
+    def _build_amc_commands_server(
+        self,
+        base_dims: Dict[str, float],
+        family_params: Dict[str, Any],
+        component: str,
+    ) -> List[Dict[str, Any]]:
+        px = base_dims["px"]
+        py = base_dims["py"]
+        sx = base_dims["sx"]
+        sy = base_dims["sy"]
+        h_sub = base_dims["h_sub"]
+        t_cu = base_dims["t_cu"]
+        f0 = max(0.1, base_dims["f0"])
+
+        wavelength_mm = 300.0 / f0
+        period_fallback = max(0.14 * wavelength_mm, min(0.65 * max(px, py), 0.24 * wavelength_mm))
+        amc_period = float(family_params.get("amc_unit_cell_period_mm", period_fallback))
+        amc_period = max(1.0, amc_period)
+
+        amc_cell = float(family_params.get("amc_patch_size_mm", 0.90 * amc_period))
+        amc_cell = max(0.1, min(amc_cell, amc_period - 0.05))
+
+        amc_gap = float(family_params.get("amc_gap_mm", amc_period - amc_cell))
+        amc_gap = max(0.05, amc_gap)
+
+        amc_air_gap = float(family_params.get("amc_air_gap_mm", max(2.0, 0.02 * wavelength_mm)))
+        amc_air_gap = max(0.0, amc_air_gap)
+
+        amc_sub_h = float(family_params.get("amc_via_height_mm", max(1.0, 0.5 * h_sub)))
+        amc_sub_h = max(0.2, amc_sub_h)
+
+        nx_fallback = max(5, min(11, int(round(sx / amc_period)) or 7))
+        ny_fallback = max(5, min(11, int(round(sy / amc_period)) or 7))
+        amc_nx = int(round(float(family_params.get("amc_array_cols", nx_fallback))))
+        amc_ny = int(round(float(family_params.get("amc_array_rows", ny_fallback))))
+
+        amc_nx = max(3, min(21, amc_nx))
+        amc_ny = max(3, min(21, amc_ny))
+        if amc_nx % 2 == 0:
+            amc_nx += 1
+        if amc_ny % 2 == 0:
+            amc_ny += 1
+
+        return self._materialize_amc_brick_commands(
+            component=component,
+            t_cu=t_cu,
+            amc_period=amc_period,
+            amc_cell=amc_cell,
+            amc_gap=amc_gap,
+            amc_air_gap=amc_air_gap,
+            amc_sub_h=amc_sub_h,
+            amc_nx=amc_nx,
+            amc_ny=amc_ny,
+        )
+
+    def _materialize_amc_brick_commands(
+        self,
+        *,
+        component: str,
+        t_cu: float,
+        amc_period: float,
+        amc_cell: float,
+        amc_gap: float,
+        amc_air_gap: float,
+        amc_sub_h: float,
+        amc_nx: int,
+        amc_ny: int,
+    ) -> List[Dict[str, Any]]:
+        amc_size_x = amc_nx * amc_period
+        amc_size_y = amc_ny * amc_period
+
+        amc_cell_z0 = -t_cu - amc_air_gap
+        amc_cell_z1 = amc_cell_z0 + t_cu
+        amc_sub_z1 = amc_cell_z0
+        amc_sub_z0 = amc_sub_z1 - amc_sub_h
+        amc_gnd_z1 = amc_sub_z0
+        amc_gnd_z0 = amc_gnd_z1 - t_cu
+
+        commands: List[Dict[str, Any]] = [
+            {
+                "command": "create_component",
+                "params": {"component": component},
+                "on_failure": "abort",
+                "checksum_scope": "geometry",
+            },
+            {
+                "command": "define_parameter",
+                "params": {"name": "amc_period", "value": amc_period},
+                "on_failure": "abort",
+                "checksum_scope": "geometry",
+            },
+            {
+                "command": "define_parameter",
+                "params": {"name": "amc_cell", "value": amc_cell},
+                "on_failure": "abort",
+                "checksum_scope": "geometry",
+            },
+            {
+                "command": "define_parameter",
+                "params": {"name": "amc_gap", "value": amc_gap},
+                "on_failure": "abort",
+                "checksum_scope": "geometry",
+            },
+            {
+                "command": "define_parameter",
+                "params": {"name": "amc_nx", "value": amc_nx},
+                "on_failure": "abort",
+                "checksum_scope": "geometry",
+            },
+            {
+                "command": "define_parameter",
+                "params": {"name": "amc_ny", "value": amc_ny},
+                "on_failure": "abort",
+                "checksum_scope": "geometry",
+            },
+            {
+                "command": "define_parameter",
+                "params": {"name": "amc_air_gap", "value": amc_air_gap},
+                "on_failure": "abort",
+                "checksum_scope": "geometry",
+            },
+            {
+                "command": "define_parameter",
+                "params": {"name": "amc_sub_h", "value": amc_sub_h},
+                "on_failure": "abort",
+                "checksum_scope": "geometry",
+            },
+            {
+                "command": "define_brick",
+                "params": {
+                    "name": "amc_substrate",
+                    "component": component,
+                    "material": "FR-4_(lossy)",
+                    "xrange": [-amc_size_x / 2.0, amc_size_x / 2.0],
+                    "yrange": [-amc_size_y / 2.0, amc_size_y / 2.0],
+                    "zrange": [amc_sub_z0, amc_sub_z1],
+                },
+                "on_failure": "abort",
+                "checksum_scope": "geometry",
+            },
+            {
+                "command": "define_brick",
+                "params": {
+                    "name": "amc_ground",
+                    "component": component,
+                    "material": "Copper_(annealed)",
+                    "xrange": [-amc_size_x / 2.0, amc_size_x / 2.0],
+                    "yrange": [-amc_size_y / 2.0, amc_size_y / 2.0],
+                    "zrange": [amc_gnd_z0, amc_gnd_z1],
+                },
+                "on_failure": "abort",
+                "checksum_scope": "geometry",
+            },
+        ]
+
+        x0 = -(amc_nx - 1) * amc_period / 2.0
+        y0 = -(amc_ny - 1) * amc_period / 2.0
+        for ix in range(amc_nx):
+            for iy in range(amc_ny):
+                cx = x0 + ix * amc_period
+                cy = y0 + iy * amc_period
+                commands.append(
+                    {
+                        "command": "define_brick",
+                        "params": {
+                            "name": f"amc_cell_{ix}_{iy}",
+                            "component": component,
+                            "material": "Copper_(annealed)",
+                            "xrange": [cx - (amc_cell / 2.0), cx + (amc_cell / 2.0)],
+                            "yrange": [cy - (amc_cell / 2.0), cy + (amc_cell / 2.0)],
+                            "zrange": [amc_cell_z0, amc_cell_z1],
+                        },
+                        "on_failure": "abort",
+                        "checksum_scope": "geometry",
+                    }
+                )
+
+        return commands
+
+    def _build_amc_subcommands(self, command: Command, package: CommandPackage) -> List[Command]:
+        strategy = str(command.params.get("strategy", "server_family_parameters")).strip().lower()
+        component = str(command.params.get("component", "amc")).strip() or "amc"
+
+        base_dims = self._extract_base_dims_for_amc(package)
+        family_params = self._extract_server_amc_family_params(package)
+        use_server = strategy in {"server", "server_family_parameters", "server_params"}
+        can_use_server = use_server and self._is_number(family_params.get("amc_unit_cell_period_mm"))
+
+        if can_use_server:
+            command_dicts = self._build_amc_commands_server(base_dims, family_params, component)
+            self.artifacts["amc_impl_strategy"] = "server_family_parameters"
+        else:
+            command_dicts = self._build_amc_commands_heuristic(base_dims, component)
+            self.artifacts["amc_impl_strategy"] = "client_heuristic"
+
+        synthetic: List[Command] = []
+        seq_seed = int(command.seq) * 1000
+        for idx, item in enumerate(command_dicts, start=1):
+            payload = dict(item)
+            payload["seq"] = seq_seed + idx
+            synthetic.append(Command.model_validate(payload))
+        return synthetic
 
     @staticmethod
     def _as_expr(value: Any) -> str | None:
@@ -579,11 +881,39 @@ class ExecutionEngine:
                     )
                 mode = "prepared" if self.dry_run else "executed"
                 action = "define_parameter" if create_only else "update_parameter"
+                if name:
+                    self._parameter_context[name] = value
                 return ExecutionResult(
                     f"{command.seq}:{command.command}",
                     success=True,
                     output=f"{mode.capitalize()} {action} via Parameter List API",
                     macro=vba_code,
+                )
+
+            if command.command == "implement_amc":
+                subcommands = self._build_amc_subcommands(command, package)
+                for subcommand in subcommands:
+                    sub_result = await self._execute_command(subcommand, package)
+                    if not sub_result.success:
+                        return ExecutionResult(
+                            f"{command.seq}:{command.command}",
+                            success=False,
+                            error=(
+                                "Failed while expanding implement_amc via "
+                                f"{subcommand.command}: {sub_result.error}"
+                            ),
+                        )
+                self.artifacts["amc_implemented"] = True
+                self.artifacts["amc_component"] = str(command.params.get("component", "amc"))
+                return ExecutionResult(
+                    f"{command.seq}:{command.command}",
+                    success=True,
+                    output=(
+                        "Implemented AMC geometry via "
+                        f"{self.artifacts.get('amc_impl_strategy', 'client_heuristic')} "
+                        f"with {len(subcommands)} generated commands"
+                    ),
+                    macro="",
                 )
 
             if command.command == "export_s_parameters":

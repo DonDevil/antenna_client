@@ -47,6 +47,7 @@
     "create_component": {
       "any_of": [["component"], ["name"]]
     },
+    "implement_amc": {},
     "define_brick": {
       "required_params": ["name", "component", "xrange", "yrange", "zrange"]
     },
