@@ -32,6 +32,35 @@ FAMILY_QUALIFIER_DEFAULTS = {
     },
 }
 
+DEFAULT_CONDUCTOR_MATERIALS = [
+    "Copper (annealed)",
+    "Aluminum",
+    "Silver",
+    "Gold",
+]
+
+DEFAULT_SUBSTRATE_MATERIALS = [
+    "FR-4 (lossy)",
+    "Rogers RT/duroid 5880",
+    "Rogers RO3003",
+    "Rogers RO4350B",
+]
+
+FAMILY_MATERIAL_DEFAULTS = {
+    "amc_patch": {
+        "conductor": "Copper (annealed)",
+        "substrate": "FR-4 (lossy)",
+    },
+    "microstrip_patch": {
+        "conductor": "Copper (annealed)",
+        "substrate": "Rogers RT/duroid 5880",
+    },
+    "wban_patch": {
+        "conductor": "Copper (annealed)",
+        "substrate": "Rogers RO3003",
+    },
+}
+
 
 class DesignPanel(QWidget):
     """Widget for antenna design specifications"""
@@ -70,6 +99,14 @@ class DesignPanel(QWidget):
         self.polarization_combo = QComboBox()
         self.polarization_combo.addItems(["linear", "circular", "dual", "unspecified"])
         specs_layout.addRow("Polarization:", self.polarization_combo)
+
+        self.conductor_combo = QComboBox()
+        self.conductor_combo.addItems(DEFAULT_CONDUCTOR_MATERIALS)
+        specs_layout.addRow("Conductor:", self.conductor_combo)
+
+        self.substrate_combo = QComboBox()
+        self.substrate_combo.addItems(DEFAULT_SUBSTRATE_MATERIALS)
+        specs_layout.addRow("Substrate:", self.substrate_combo)
 
         # Chat behavior mode
         self.chat_mode_combo = QComboBox()
@@ -182,6 +219,8 @@ class DesignPanel(QWidget):
         self.patch_shape_combo.currentTextChanged.connect(self._emit_design_changed)
         self.feed_type_combo.currentTextChanged.connect(self._emit_design_changed)
         self.polarization_combo.currentTextChanged.connect(self._emit_design_changed)
+        self.conductor_combo.currentTextChanged.connect(self._emit_design_changed)
+        self.substrate_combo.currentTextChanged.connect(self._emit_design_changed)
         self.freq_spin.valueChanged.connect(self._emit_design_changed)
         self.bw_spin.valueChanged.connect(self._emit_design_changed)
         self.vswr_spin.valueChanged.connect(self._emit_design_changed)
@@ -215,6 +254,8 @@ class DesignPanel(QWidget):
         patch_shape: str | None = None,
         feed_type: str | None = None,
         polarization: str | None = None,
+        conductor_material: str | None = None,
+        substrate_material: str | None = None,
     ) -> None:
         """Update fields from parsed chat or session state."""
         if antenna_family and antenna_family in [self.antenna_combo.itemText(i) for i in range(self.antenna_combo.count())]:
@@ -222,6 +263,8 @@ class DesignPanel(QWidget):
         self._set_combo_text(self.patch_shape_combo, patch_shape)
         self._set_combo_text(self.feed_type_combo, feed_type)
         self._set_combo_text(self.polarization_combo, polarization)
+        self._set_combo_text(self.conductor_combo, conductor_material)
+        self._set_combo_text(self.substrate_combo, substrate_material)
         if frequency_ghz is not None:
             self.freq_spin.setValue(max(self.freq_spin.minimum(), min(self.freq_spin.maximum(), float(frequency_ghz))))
         if bandwidth_mhz is not None:
@@ -240,6 +283,13 @@ class DesignPanel(QWidget):
         if current in cleaned:
             self.antenna_combo.setCurrentText(current)
         self.antenna_combo.blockSignals(False)
+        self._apply_family_defaults(self.antenna_combo.currentText())
+
+    def set_supported_materials(self, conductors: list[str], substrates: list[str]) -> None:
+        """Update conductor/substrate options from server capabilities."""
+        self._replace_combo_items(self.conductor_combo, conductors)
+        self._replace_combo_items(self.substrate_combo, substrates)
+        self._apply_family_defaults(self.antenna_combo.currentText())
 
     def set_session_metadata(
         self,
@@ -284,6 +334,10 @@ class DesignPanel(QWidget):
         self._set_combo_text(self.feed_type_combo, defaults["feed_type"])
         self._set_combo_text(self.polarization_combo, defaults["polarization"])
 
+        material_defaults = FAMILY_MATERIAL_DEFAULTS.get(antenna_family, FAMILY_MATERIAL_DEFAULTS["amc_patch"])
+        self._set_combo_text(self.conductor_combo, material_defaults["conductor"])
+        self._set_combo_text(self.substrate_combo, material_defaults["substrate"])
+
     @staticmethod
     def _set_combo_text(combo: QComboBox, value: str | None) -> None:
         if value is None:
@@ -294,6 +348,24 @@ class DesignPanel(QWidget):
         if combo.findText(resolved) >= 0:
             combo.setCurrentText(resolved)
 
+    @staticmethod
+    def _replace_combo_items(combo: QComboBox, values: list[str] | None) -> None:
+        cleaned: list[str] = []
+        for value in values or []:
+            resolved = str(value).strip()
+            if resolved and resolved not in cleaned:
+                cleaned.append(resolved)
+        if not cleaned:
+            return
+
+        current = combo.currentText()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItems(cleaned)
+        if current in cleaned:
+            combo.setCurrentText(current)
+        combo.blockSignals(False)
+
     def _emit_design_changed(self):
         self.design_changed.emit(self.get_specs())
     
@@ -303,16 +375,24 @@ class DesignPanel(QWidget):
         Returns:
             Dictionary with design specs
         """
+        conductor = self.conductor_combo.currentText().strip()
+        substrate = self.substrate_combo.currentText().strip()
         return {
             "antenna_family": self.antenna_combo.currentText(),
             "patch_shape": self.patch_shape_combo.currentText(),
             "feed_type": self.feed_type_combo.currentText(),
             "polarization": self.polarization_combo.currentText(),
+            "conductor_material": conductor,
+            "substrate_material": substrate,
+            "allowed_materials": [conductor] if conductor else [],
+            "allowed_substrates": [substrate] if substrate else [],
             "frequency_ghz": self.freq_spin.value(),
             "bandwidth_mhz": self.bw_spin.value(),
             "constraints": {
                 "max_vswr": self.vswr_spin.value(),
-                "target_gain_dbi": self.gain_spin.value()
+                "target_gain_dbi": self.gain_spin.value(),
+                "allowed_materials": [conductor] if conductor else [],
+                "allowed_substrates": [substrate] if substrate else [],
             }
         }
 

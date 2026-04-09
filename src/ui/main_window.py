@@ -150,8 +150,12 @@ class MainWindow(QMainWindow):
         capabilities_payload = state.get("capabilities", {})
         payload = capabilities_payload.get("capabilities", capabilities_payload)
         supported_families = payload.get("supported_families") or payload.get("supported_antenna_families") or []
+        supported_conductors = payload.get("available_conductor_materials") or []
+        supported_substrates = payload.get("available_substrate_materials") or []
         if supported_families:
             self.design_panel.set_supported_families(supported_families)
+        if supported_conductors or supported_substrates:
+            self.design_panel.set_supported_materials(supported_conductors, supported_substrates)
         self.message_handler.set_capabilities(capabilities_payload)
 
         # Restore latest persisted session when available; otherwise start fresh.

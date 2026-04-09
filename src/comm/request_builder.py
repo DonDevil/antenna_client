@@ -58,6 +58,28 @@ class RequestBuilder:
             "max_simulation_timeout_sec": 600,
             "export_formats": ["json", "csv", "txt"],
         }
+
+    @staticmethod
+    def _first_string(*values: Any) -> str | None:
+        for value in values:
+            if isinstance(value, str):
+                resolved = value.strip()
+                if resolved:
+                    return resolved
+        return None
+
+    @classmethod
+    def _coerce_string_list(cls, value: Any) -> list[str]:
+        if isinstance(value, (list, tuple)):
+            cleaned: list[str] = []
+            for item in value:
+                resolved = cls._first_string(item)
+                if resolved and resolved not in cleaned:
+                    cleaned.append(resolved)
+            return cleaned
+
+        resolved = cls._first_string(value)
+        return [resolved] if resolved else []
     
     def build_optimize_request(
         self,
@@ -146,15 +168,41 @@ class RequestBuilder:
         """
         resolved_specs = design_specs or {}
         constraints = resolved_specs.get("constraints", {}) if design_specs else {}
-        allowed_materials = resolved_specs.get("allowed_materials") or constraints.get("allowed_materials") or ["Copper (annealed)"]
-        allowed_substrates = (
-            resolved_specs.get("allowed_substrates")
-            or constraints.get("allowed_substrates")
-            or FAMILY_DEFAULT_SUBSTRATES.get(antenna_family, ["FR-4 (lossy)"])
+
+        explicit_conductor = self._first_string(
+            resolved_specs.get("conductor_material"),
+            resolved_specs.get("conductor_name"),
+            constraints.get("conductor_material"),
+            constraints.get("conductor_name"),
         )
+        explicit_substrate = self._first_string(
+            resolved_specs.get("substrate_material"),
+            resolved_specs.get("substrate_name"),
+            constraints.get("substrate_material"),
+            constraints.get("substrate_name"),
+        )
+
+        allowed_materials = (
+            self._coerce_string_list(resolved_specs.get("allowed_materials"))
+            or self._coerce_string_list(constraints.get("allowed_materials"))
+        )
+        if not allowed_materials and explicit_conductor:
+            allowed_materials = [explicit_conductor]
+        if not allowed_materials:
+            allowed_materials = ["Copper (annealed)"]
+
+        allowed_substrates = (
+            self._coerce_string_list(resolved_specs.get("allowed_substrates"))
+            or self._coerce_string_list(constraints.get("allowed_substrates"))
+        )
+        if not allowed_substrates and explicit_substrate:
+            allowed_substrates = [explicit_substrate]
+        if not allowed_substrates:
+            allowed_substrates = list(FAMILY_DEFAULT_SUBSTRATES.get(antenna_family, ["FR-4 (lossy)"]))
+
         return {
-            "allowed_materials": list(allowed_materials),
-            "allowed_substrates": list(allowed_substrates),
+            "allowed_materials": allowed_materials,
+            "allowed_substrates": allowed_substrates,
         }
     
     def _build_optimization_policy(self, target_spec: Dict[str, Any], design_specs: Optional[Dict[str, Any]]) -> Dict[str, Any]:

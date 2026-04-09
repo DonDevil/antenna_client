@@ -298,6 +298,8 @@ class ChatMessageHandler:
     def on_chat_response_received(self, payload: dict[str, Any]):
         """Update the form from chat parsing and show the assistant reply."""
         self.requirements.update(payload.get("requirements", {}))
+        allowed_substrates = self.requirements.get("allowed_substrates") if isinstance(self.requirements.get("allowed_substrates"), list) else []
+        allowed_materials = self.requirements.get("allowed_materials") if isinstance(self.requirements.get("allowed_materials"), list) else []
         self.design_panel.set_spec_values(
             frequency_ghz=self.requirements.get("frequency_ghz"),
             bandwidth_mhz=self.requirements.get("bandwidth_mhz"),
@@ -305,6 +307,16 @@ class ChatMessageHandler:
             patch_shape=self.requirements.get("patch_shape"),
             feed_type=self.requirements.get("feed_type"),
             polarization=self.requirements.get("polarization"),
+            substrate_material=self._first_string(
+                self.requirements.get("substrate_material"),
+                self.requirements.get("substrate_name"),
+                allowed_substrates[0] if allowed_substrates else None,
+            ),
+            conductor_material=self._first_string(
+                self.requirements.get("conductor_material"),
+                self.requirements.get("conductor_name"),
+                allowed_materials[0] if allowed_materials else None,
+            ),
         )
         response_text = payload.get("assistant_message", "Requirements updated.")
         logger.info(f"Chat response received: {response_text}")
