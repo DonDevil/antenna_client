@@ -117,15 +117,23 @@ class ChatRequestWorker(_BaseWorker):
             }
 
         requirements = dict(self.requirements)
+        if isinstance(response, dict) and isinstance(response.get("requirements"), dict):
+            requirements.update(response.get("requirements", {}))
         parsed_freq = intent_summary.get("parsed_frequency_ghz")
         parsed_bw = intent_summary.get("parsed_bandwidth_mhz")
         parsed_family = intent_summary.get("parsed_antenna_family")
+        parsed_substrate = intent_summary.get("parsed_substrate_material")
+        parsed_conductor = intent_summary.get("parsed_conductor_material")
         if parsed_freq is not None:
             requirements["frequency_ghz"] = float(parsed_freq)
         if parsed_bw is not None:
             requirements["bandwidth_mhz"] = float(parsed_bw)
         if parsed_family:
             requirements["antenna_family"] = parsed_family
+        if parsed_substrate:
+            requirements["substrate_material"] = str(parsed_substrate)
+        if parsed_conductor:
+            requirements["conductor_material"] = str(parsed_conductor)
 
         assistant_message = response.get("assistant_message")
         if not assistant_message:
@@ -319,7 +327,7 @@ class ChatMessageHandler:
 
     def handle_start_pipeline(self):
         """Build optimize request from the form and start the server pipeline."""
-        specs = self.design_panel.get_specs()
+        specs = self._merge_material_requirements_into_specs(self.design_panel.get_specs())
         validation_error = self._validate_specs(specs)
         if validation_error:
             self.chat_widget.add_message(validation_error, "assistant")
@@ -339,7 +347,10 @@ class ChatMessageHandler:
         self.current_optimize_response = response_data
         self.session_id = optimize_response.session_id
         self.trace_id = optimize_response.trace_id
-        self.current_command_package = optimize_response.command_package
+        self.current_command_package = self._inject_response_materials_into_command_package(
+            optimize_response.command_package,
+            response_data,
+        )
         self.design_id = None
         self.iteration_index = 0
 
@@ -760,6 +771,118 @@ class ChatMessageHandler:
         if family not in {"amc_patch", "microstrip_patch", "wban_patch"}:
             return "Antenna family must be one of: amc_patch, microstrip_patch, wban_patch."
         return None
+
+    @staticmethod
+    def _first_string(*values: Any) -> str | None:
+        for value in values:
+            if isinstance(value, str):
+                text = value.strip()
+                if text:
+                    return text
+        return None
+
+    def _merge_material_requirements_into_specs(self, specs: dict[str, Any]) -> dict[str, Any]:
+        merged = dict(specs)
+        req = self.requirements if isinstance(self.requirements, dict) else {}
+
+        allowed_materials = req.get("allowed_materials") if isinstance(req.get("allowed_materials"), list) else None
+        allowed_substrates = req.get("allowed_substrates") if isinstance(req.get("allowed_substrates"), list) else None
+
+        conductor = self._first_string(req.get("conductor_material"), req.get("conductor_name"))
+        substrate = self._first_string(req.get("substrate_material"), req.get("substrate_name"))
+
+        if allowed_materials:
+            merged["allowed_materials"] = list(allowed_materials)
+        elif conductor:
+            merged["allowed_materials"] = [conductor]
+
+        if allowed_substrates:
+            merged["allowed_substrates"] = list(allowed_substrates)
+        elif substrate:
+            merged["allowed_substrates"] = [substrate]
+
+        return merged
+
+    def _extract_response_materials(self, response_data: dict[str, Any]) -> tuple[str | None, str | None]:
+        substrate = None
+        conductor = None
+
+        command_package = response_data.get("command_package") if isinstance(response_data.get("command_package"), dict) else {}
+        design_recipe = command_package.get("design_recipe") if isinstance(command_package.get("design_recipe"), dict) else {}
+        family_params = design_recipe.get("family_parameters") if isinstance(design_recipe.get("family_parameters"), dict) else {}
+
+        ann_prediction = response_data.get("ann_prediction") if isinstance(response_data.get("ann_prediction"), dict) else {}
+        ann_family_params = ann_prediction.get("family_parameters") if isinstance(ann_prediction.get("family_parameters"), dict) else {}
+
+        substrate = self._first_string(
+            response_data.get("substrate_material"),
+            response_data.get("substrate_name"),
+            design_recipe.get("substrate_material"),
+            design_recipe.get("substrate_name"),
+            family_params.get("substrate_material"),
+            family_params.get("substrate_name"),
+            ann_prediction.get("substrate_material"),
+            ann_family_params.get("substrate_material"),
+            ann_family_params.get("substrate_name"),
+        )
+
+        conductor = self._first_string(
+            response_data.get("conductor_material"),
+            response_data.get("conductor_name"),
+            design_recipe.get("conductor_material"),
+            design_recipe.get("conductor_name"),
+            family_params.get("conductor_material"),
+            family_params.get("conductor_name"),
+            ann_prediction.get("conductor_material"),
+            ann_family_params.get("conductor_material"),
+            ann_family_params.get("conductor_name"),
+        )
+        return substrate, conductor
+
+    def _inject_response_materials_into_command_package(
+        self,
+        command_package: dict[str, Any] | None,
+        response_data: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if not isinstance(command_package, dict):
+            return command_package
+
+        substrate, conductor = self._extract_response_materials(response_data)
+        if not substrate and not conductor:
+            return command_package
+
+        patched = dict(command_package)
+        recipe = dict(patched.get("design_recipe") or {})
+        if substrate and not self._first_string(recipe.get("substrate_material"), recipe.get("substrate_name")):
+            recipe["substrate_material"] = substrate
+        if conductor and not self._first_string(recipe.get("conductor_material"), recipe.get("conductor_name")):
+            recipe["conductor_material"] = conductor
+        patched["design_recipe"] = recipe
+
+        commands = list(patched.get("commands") or [])
+        for cmd in commands:
+            if not isinstance(cmd, dict):
+                continue
+            params = cmd.get("params")
+            if not isinstance(params, dict):
+                continue
+
+            command_name = str(cmd.get("command", "")).strip().lower()
+            solid_name = str(params.get("name", "")).strip().lower()
+            existing_material = self._first_string(params.get("material"))
+
+            if substrate and command_name == "create_substrate" and not existing_material:
+                params["material"] = substrate
+            elif conductor and command_name in {"create_ground_plane", "create_patch", "create_feedline"} and not existing_material:
+                params["material"] = conductor
+            elif command_name == "define_brick":
+                if substrate and solid_name == "substrate" and not existing_material:
+                    params["material"] = substrate
+                elif conductor and solid_name in {"ground", "patch", "feed"} and not existing_material:
+                    params["material"] = conductor
+
+        patched["commands"] = commands
+        return patched
 
     def _normalize_error_message(self, error: str) -> str:
         if "422" in error:

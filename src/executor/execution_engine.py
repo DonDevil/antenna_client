@@ -243,11 +243,24 @@ class ExecutionEngine:
         _add_unique(conductor_candidates, command_params.get("conductor_name"))
         _add_unique(conductor_candidates, command_params.get("metal_material"))
 
-        # 2) Server-side family parameters and recipe payload.
-        _add_unique(substrate_candidates, family_params.get("substrate_material"))
-        _add_unique(substrate_candidates, family_params.get("substrate_name"))
-        _add_unique(conductor_candidates, family_params.get("conductor_material"))
-        _add_unique(conductor_candidates, family_params.get("conductor_name"))
+        # 2) Explicit base-geometry command materials from the package should win.
+        for pkg_cmd in list(getattr(package, "commands", []) or []):
+            cmd_name = str(getattr(pkg_cmd, "command", "") or "").strip().lower()
+            params = getattr(pkg_cmd, "params", {})
+            if not isinstance(params, dict):
+                continue
+            material = params.get("material")
+            solid_name = str(params.get("name", "") or "").strip().lower()
+
+            if cmd_name == "create_substrate":
+                _add_unique(substrate_candidates, material)
+            elif cmd_name in {"create_ground_plane", "create_patch", "create_feedline"}:
+                _add_unique(conductor_candidates, material)
+            elif cmd_name == "define_brick":
+                if solid_name == "substrate":
+                    _add_unique(substrate_candidates, material)
+                elif solid_name in {"ground", "patch", "feed"}:
+                    _add_unique(conductor_candidates, material)
 
         extras = self._get_package_extras(package)
         design_recipe = extras.get("design_recipe") if isinstance(extras.get("design_recipe"), dict) else {}
@@ -256,15 +269,11 @@ class ExecutionEngine:
             request_payload.get("design_constraints") if isinstance(request_payload.get("design_constraints"), dict) else {}
         )
 
-        _add_unique(substrate_candidates, design_recipe.get("substrate_material"))
-        _add_unique(substrate_candidates, design_recipe.get("substrate_name"))
-        _add_unique(conductor_candidates, design_recipe.get("conductor_material"))
-        _add_unique(conductor_candidates, design_recipe.get("conductor_name"))
-
+        # 3) Request constraints are next-best source when explicit command materials are absent.
         _add_unique(substrate_candidates, self._first_from_list(design_constraints.get("allowed_substrates")))
         _add_unique(conductor_candidates, self._first_from_list(design_constraints.get("allowed_materials")))
 
-        # 3) Materials already used in prior geometry commands in this package.
+        # 4) Runtime geometry context from already executed commands.
         substrate_geom = self._geometry_context.get("substrate") if isinstance(self._geometry_context.get("substrate"), dict) else {}
         _add_unique(substrate_candidates, substrate_geom.get("material"))
 
@@ -275,7 +284,18 @@ class ExecutionEngine:
         _add_unique(conductor_candidates, ground_geom.get("material"))
         _add_unique(conductor_candidates, feed_geom.get("material"))
 
-        # 4) Defined material catalog tracked from define_material commands.
+        # 5) Server-side family metadata as fallback only.
+        _add_unique(substrate_candidates, family_params.get("substrate_material"))
+        _add_unique(substrate_candidates, family_params.get("substrate_name"))
+        _add_unique(conductor_candidates, family_params.get("conductor_material"))
+        _add_unique(conductor_candidates, family_params.get("conductor_name"))
+
+        _add_unique(substrate_candidates, design_recipe.get("substrate_material"))
+        _add_unique(substrate_candidates, design_recipe.get("substrate_name"))
+        _add_unique(conductor_candidates, design_recipe.get("conductor_material"))
+        _add_unique(conductor_candidates, design_recipe.get("conductor_name"))
+
+        # 6) Defined material catalog tracked from define_material commands.
         by_kind = self._material_context.get("by_kind") if isinstance(self._material_context.get("by_kind"), dict) else {}
         _add_unique(substrate_candidates, by_kind.get("substrate"))
         _add_unique(conductor_candidates, by_kind.get("conductor"))
