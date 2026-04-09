@@ -13,6 +13,7 @@ import argparse
 import csv
 import json
 import math
+import os
 import random
 import signal
 import sys
@@ -25,11 +26,28 @@ from pathlib import Path
 from typing import Any
 
 _SHUTDOWN = threading.Event()
+_SIGINT_COUNT = 0
+_ACTIVE_CST: CSTApp | None = None
+
+
+def _disconnect_cst_worker(cst: CSTApp) -> None:
+    try:
+        cst.disconnect()
+    except Exception:
+        pass
 
 
 def _sigint_handler(signum: int, frame: object) -> None:  # noqa: ARG001
-    if not _SHUTDOWN.is_set():
-        print("\n[Ctrl+C] Shutdown requested — current sample will complete then script exits.", flush=True)
+    global _SIGINT_COUNT
+    _SIGINT_COUNT += 1
+
+    if _SIGINT_COUNT == 1:
+        print("\n[Ctrl+C] Shutdown requested. Stopping after the current CST call returns.", flush=True)
+        if _ACTIVE_CST is not None:
+            threading.Thread(target=_disconnect_cst_worker, args=(_ACTIVE_CST,), daemon=True).start()
+    else:
+        print("\n[Ctrl+C] Forced exit requested. Terminating immediately.", flush=True)
+        os._exit(130)
     _SHUTDOWN.set()
 
 
@@ -448,6 +466,14 @@ def _apply_parameter_updates(cst: CSTApp, updates: dict[str, float]) -> None:
         raise RuntimeError("Failed to rebuild CST model after parameter updates")
 
 
+def _recycle_project(cst: CSTApp, generator: VBAGenerator, project_name: str) -> None:
+    try:
+        cst.close_project(save=False)
+    except Exception:
+        pass
+    _build_model(cst, generator, project_name=project_name)
+
+
 def _relative_to_root(path: str | None) -> str:
     if not path:
         return ""
@@ -577,11 +603,18 @@ def _run_single_sample(
 
 
 def main() -> int:
+    global _ACTIVE_CST
     parser = argparse.ArgumentParser(description="Generate CST-backed raw feedback rows for rectangular patch ANN training.")
     parser.add_argument("--samples", type=int, default=1, help="Number of CST runs to execute.")
     parser.add_argument("--seed", type=int, default=None, help="Optional random seed for reproducibility.")
     parser.add_argument("--output", default=str(RAW_DATA_PATH), help="CSV output path.")
     parser.add_argument("--baseline-only", action="store_true", help="Disable perturbations and log pure recipe geometry.")
+    parser.add_argument(
+        "--recycle-every",
+        type=int,
+        default=20,
+        help="Close and recreate the CST project after this many completed samples. Use 0 to disable.",
+    )
     args = parser.parse_args()
 
     signal.signal(signal.SIGINT, _sigint_handler)
@@ -590,12 +623,14 @@ def main() -> int:
     output_path = Path(args.output)
 
     cst = CSTApp()
+    _ACTIVE_CST = cst
     if not cst.connect():
         raise SystemExit("Failed to connect to CST. Start CST Studio and rerun.")
 
     generator = VBAGenerator()
+    project_name = "rect_patch_feedback_working"
 
-    _build_model(cst, generator, project_name="rect_patch_feedback_working")
+    _build_model(cst, generator, project_name=project_name)
 
     completed = 0
     try:
@@ -603,6 +638,12 @@ def main() -> int:
             if _SHUTDOWN.is_set():
                 print(f"Stopping early after {completed} of {args.samples} samples.", flush=True)
                 break
+            if args.recycle_every > 0 and completed > 0 and completed % args.recycle_every == 0:
+                print(
+                    f"Recycling CST project after {completed} completed samples to limit in-memory result buildup.",
+                    flush=True,
+                )
+                _recycle_project(cst, generator, project_name=project_name)
             sample = _sample_input(rng)
             base_geom = _baseline_geometry(sample)
             geom = base_geom if args.baseline_only else _perturb_geometry(base_geom, rng)
@@ -610,11 +651,15 @@ def main() -> int:
             _append_csv_row(row, output_path)
             print(json.dumps(row, indent=2))
             completed += 1
+    except KeyboardInterrupt:
+        print(f"Interrupted after {completed} completed samples.", flush=True)
+        return 130
     finally:
         try:
-            cst.close_project(save=False)
+            cst.disconnect()
         except Exception:
             pass
+        _ACTIVE_CST = None
 
     return 0
 
