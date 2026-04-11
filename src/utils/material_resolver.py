@@ -16,8 +16,9 @@ logger = get_logger(__name__)
 
 
 # ── family-level substrate defaults (matches server expectations) ────────────
+# Note: amc_patch use Rogers RO3003 as default (user can override in UI)
 FAMILY_DEFAULT_SUBSTRATES: Dict[str, str] = {
-    "amc_patch": "FR-4 (lossy)",
+    "amc_patch": "Rogers RO3003",  # Changed: was FR-4 (lossy), now matches typical AMC substrate
     "microstrip_patch": "Rogers RT/duroid 5880",
     "wban_patch": "Rogers RO3003",
 }
@@ -70,7 +71,7 @@ def _coerce_string_list(value: Any) -> List[str]:
     return [text] if text else []
 
 
-def normalize_material_name(raw: str) -> str:
+def normalize_material_name(raw: Optional[str]) -> str:
     """Canonical form: spaces instead of underscores, no trailing whitespace."""
     text = str(raw or "").strip()
     text = text.replace("_", " ")
@@ -284,6 +285,9 @@ def stamp_materials_on_package(
     This replaces both ``_inject_response_materials_into_command_package`` from
     chat_message_handler and the command-level patching that execution_engine
     used to do.
+
+    Also generates define_material commands and prepends them to ensure
+    materials are defined in CST before being used.
     """
     patched = dict(command_package)
 
@@ -324,7 +328,62 @@ def stamp_materials_on_package(
             elif solid_name in {"ground", "patch", "feed"} and not existing:
                 params["material"] = choice.conductor
 
-    patched["commands"] = commands
+    # ── Generate define_material commands for each unique material ────────────
+    # Collect unique materials that will be used in the commands.
+    unique_materials = set()
+    for cmd in commands:
+        if isinstance(cmd, dict):
+            params = cmd.get("params")
+            if isinstance(params, dict):
+                mat = _first_string(params.get("material"))
+                if mat:
+                    unique_materials.add(mat)
+
+    # Always include the resolved conductor and substrate.
+    unique_materials.add(choice.conductor)
+    unique_materials.add(choice.substrate)
+
+    # Create define_material commands for each material.
+    # These will be inserted at the beginning of the command list.
+    material_defs = []
+    material_info = {
+        "copper annealed": {"kind": "conductor", "conductivity_s_per_m": 5.8e7},
+        "copper": {"kind": "conductor", "conductivity_s_per_m": 5.8e7},
+        "aluminum": {"kind": "conductor", "conductivity_s_per_m": 3.56e7},
+        "gold": {"kind": "conductor", "conductivity_s_per_m": 4.561e7},
+        "silver": {"kind": "conductor", "conductivity_s_per_m": 6.3e7},
+        "fr-4 lossy": {"kind": "substrate", "epsilon_r": 4.4, "loss_tangent": 0.02},
+        "fr-4": {"kind": "substrate", "epsilon_r": 4.4, "loss_tangent": 0.02},
+        "rogers rt duroid 5880": {"kind": "substrate", "epsilon_r": 2.2, "loss_tangent": 0.0009},
+        "rogers ro3003": {"kind": "substrate", "epsilon_r": 3.0, "loss_tangent": 0.0011},
+    }
+
+    for mat in sorted(unique_materials):
+        if not mat or not isinstance(mat, str):
+            continue
+        # Normalize for lookup (normalize_material_name removes accents, normalizes spacing)
+        mat_normalized = normalize_material_name(mat).lower()
+        mat_info = material_info.get(mat_normalized, {"kind": "conductor"})
+
+        define_cmd = {
+            "seq": len(material_defs) + 1,  # Will be renumbered later if needed
+            "command": "define_material",
+            "params": {
+                "name": mat,
+                **mat_info,
+            },
+            "on_failure": "continue",
+        }
+        material_defs.append(define_cmd)
+
+    # Prepend define_material commands to the command list.
+    # Adjust sequence numbers for existing commands.
+    for i, cmd in enumerate(commands):
+        if isinstance(cmd, dict):
+            current_seq = cmd.get("seq", i + 1)
+            cmd["seq"] = current_seq + len(material_defs)
+
+    patched["commands"] = material_defs + commands
     return patched
 
 

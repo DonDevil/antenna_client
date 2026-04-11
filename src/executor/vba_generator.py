@@ -371,7 +371,9 @@ End With
         raw = str(value).strip()
         if not raw:
             return "unnamed"
-        sanitized = re.sub(r'[~\[\]:,|*/\\$"^<>?]+', "_", raw)
+        # Treat parentheses as separators too so variants like
+        # "Copper (annealed)" and "Copper_annealed" map to the same CST token.
+        sanitized = re.sub(r'[~\[\]():,|*/\\$"^<>?]+', "_", raw)
         sanitized = re.sub(r"\s+", "_", sanitized)
         sanitized = re.sub(r"_+", "_", sanitized).strip("_")
         return sanitized or "unnamed"

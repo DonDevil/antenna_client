@@ -199,7 +199,7 @@ def test_define_material_uses_fr4_library_preset() -> None:
         },
     )
 
-    assert '.Name "FR-4_(lossy)"' in macro
+    assert '.Name "FR-4_lossy"' in macro
     assert '.Epsilon "4.3"' in macro
     assert '.TanD "0.025"' in macro
     assert '.SetActiveMaterial "all"' in macro
@@ -232,7 +232,7 @@ def test_define_material_uses_rogers_ro3003_library_preset() -> None:
         },
     )
 
-    assert '.Name "Rogers_RO3003_(lossy)"' in macro
+    assert '.Name "Rogers_RO3003_lossy"' in macro
     assert '.Epsilon "3"' in macro
     assert '.TanD "0.0010"' in macro
 
@@ -248,6 +248,11 @@ def test_define_material_uses_rogers_ro4350b_library_preset() -> None:
         },
     )
 
-    assert '.Name "Rogers_RO4350B_(lossy)"' in macro
+    assert '.Name "Rogers_RO4350B_lossy"' in macro
     assert '.Epsilon "3.66"' in macro
     assert '.TanD "0.0037"' in macro
+
+
+def test_sanitize_cst_name_maps_material_aliases_to_same_token() -> None:
+    assert VBAGenerator._sanitize_cst_name("Copper (annealed)") == "Copper_annealed"
+    assert VBAGenerator._sanitize_cst_name("Copper_annealed") == "Copper_annealed"

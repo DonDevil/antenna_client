@@ -123,7 +123,7 @@ def test_family_default_substrate():
 
 
 def test_absolute_fallback():
-    """Nothing provided → Copper + FR-4."""
+    """Nothing provided → Copper + Rogers RO3003 (amc_patch default)."""
     choice = resolve_materials()
     assert choice.conductor == FALLBACK_CONDUCTOR
     assert choice.substrate == FAMILY_DEFAULT_SUBSTRATES["amc_patch"]
@@ -158,7 +158,7 @@ def test_underscore_names_normalized():
 # ── stamp_materials_on_package ───────────────────────────────────────────────
 
 def test_stamp_fills_missing_materials():
-    """stamp_materials_on_package patches commands that lack material."""
+    """stamp_materials_on_package patches commands that lack material and prepends define_material commands."""
     package = {
         "commands": [
             {"command": "create_substrate", "params": {"name": "substrate"}},
@@ -174,17 +174,24 @@ def test_stamp_fills_missing_materials():
     )
     result = stamp_materials_on_package(package, choice)
 
-    assert result["commands"][0]["params"]["material"] == "Rogers RO4350B"
-    assert result["commands"][1]["params"]["material"] == "Gold"
-    assert result["commands"][2]["params"]["material"] == "Gold"
+    # Now expects define_material commands prepended; find original commands by offset
+    # Commands 0-1: define_material commands for Gold and Rogers RO4350B
+    # Commands 2-4: original commands with material patching
+    num_define_materials = sum(1 for cmd in result["commands"] if cmd.get("command") == "define_material")
+    assert num_define_materials == 2  # Gold and Rogers RO4350B
+    
+    # Check original commands are patched correctly
+    assert result["commands"][num_define_materials + 0]["params"]["material"] == "Rogers RO4350B"
+    assert result["commands"][num_define_materials + 1]["params"]["material"] == "Gold"
+    assert result["commands"][num_define_materials + 2]["params"]["material"] == "Gold"
     assert result["design_recipe"]["conductor_material"] == "Gold"
     assert result["design_recipe"]["substrate_material"] == "Rogers RO4350B"
     assert result["_resolved_materials"]["conductor"] == "Gold"
     assert result["_resolved_materials"]["substrate"] == "Rogers RO4350B"
 
 
-def test_stamp_does_not_override_existing_materials():
-    """stamp_materials_on_package should NOT override commands that already have material."""
+def test_stamp_preserves_existing_materials():
+    """stamp_materials_on_package preserves existing material assignments."""
     package = {
         "commands": [
             {"command": "create_substrate", "params": {"name": "substrate", "material": "FR-4 (lossy)"}},
@@ -199,9 +206,10 @@ def test_stamp_does_not_override_existing_materials():
     )
     result = stamp_materials_on_package(package, choice)
 
-    # Existing materials should be preserved
-    assert result["commands"][0]["params"]["material"] == "FR-4 (lossy)"
-    assert result["commands"][1]["params"]["material"] == "Silver"
+    # Existing materials should be preserved; check after define_material commands
+    num_define_materials = sum(1 for cmd in result["commands"] if cmd.get("command") == "define_material")
+    assert result["commands"][num_define_materials + 0]["params"]["material"] == "FR-4 (lossy)"
+    assert result["commands"][num_define_materials + 1]["params"]["material"] == "Silver"
 
 
 def test_stamp_define_brick_roles():
@@ -222,10 +230,12 @@ def test_stamp_define_brick_roles():
     )
     result = stamp_materials_on_package(package, choice)
 
-    assert result["commands"][0]["params"]["material"] == "FR-4 (lossy)"
-    assert result["commands"][1]["params"]["material"] == "Copper (annealed)"
-    assert result["commands"][2]["params"]["material"] == "Copper (annealed)"
-    assert result["commands"][3]["params"]["material"] == "Copper (annealed)"
+    # Check after define_material commands prefixed
+    num_define_materials = sum(1 for cmd in result["commands"] if cmd.get("command") == "define_material")
+    assert result["commands"][num_define_materials + 0]["params"]["material"] == "FR-4 (lossy)"
+    assert result["commands"][num_define_materials + 1]["params"]["material"] == "Copper (annealed)"
+    assert result["commands"][num_define_materials + 2]["params"]["material"] == "Copper (annealed)"
+    assert result["commands"][num_define_materials + 3]["params"]["material"] == "Copper (annealed)"
 
 
 # ── integration: resolve + stamp ─────────────────────────────────────────────
@@ -256,5 +266,7 @@ def test_full_resolve_and_stamp_pipeline():
     assert choice.substrate == "Rogers RT/duroid 5880"
 
     result = stamp_materials_on_package(response_data["command_package"], choice)
-    assert result["commands"][0]["params"]["material"] == "Rogers RT/duroid 5880"
-    assert result["commands"][1]["params"]["material"] == "Silver"
+    # Account for prepended define_material commands
+    num_define_materials = sum(1 for cmd in result["commands"] if cmd.get("command") == "define_material")
+    assert result["commands"][num_define_materials + 0]["params"]["material"] == "Rogers RT/duroid 5880"
+    assert result["commands"][num_define_materials + 1]["params"]["material"] == "Silver"

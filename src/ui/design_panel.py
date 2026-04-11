@@ -49,7 +49,7 @@ DEFAULT_SUBSTRATE_MATERIALS = [
 FAMILY_MATERIAL_DEFAULTS = {
     "amc_patch": {
         "conductor": "Copper (annealed)",
-        "substrate": "FR-4 (lossy)",
+        "substrate": "Rogers RO3003",  # Changed: was FR-4 (lossy), now matches typical AMC substrate
     },
     "microstrip_patch": {
         "conductor": "Copper (annealed)",

@@ -233,16 +233,26 @@ class ExecutionEngine:
         command_params: Dict[str, Any],
         family_params: Dict[str, Any],
     ) -> tuple[str, str]:
-        """Read materials from the pre-stamped package or fall back to the resolver.
+        """Read materials from the pre-stamped package.
 
-        ``stamp_materials_on_package`` (called before execution) writes the
-        resolved conductor/substrate into ``design_recipe``. This method simply
-        reads those values. If they are somehow missing (e.g. a raw package
-        without stamping), it falls back to ``resolve_materials`` as a safety net.
+        Priority chain (first match wins):
+          1. _resolved_materials (from pre-resolution by resolution engine)
+          2. command_params (from implement_amc command parameters)
+          3. design_recipe (from user's UI selection, stamped by stamp_materials_on_package)
+          4. family_params (from server's family_parameters)
+          5. FALLBACK_SUBSTRATE/FALLBACK_CONDUCTOR
+
+        This ensures user's material selection always takes precedence over family defaults.
         """
         extras = self._get_package_extras(package)
         resolved = extras.get("_resolved_materials") if isinstance(extras.get("_resolved_materials"), dict) else {}
         recipe = extras.get("design_recipe") if isinstance(extras.get("design_recipe"), dict) else {}
+
+        # Log what we found for debugging
+        if resolved:
+            logger.debug(f"Found resolved materials in extras: {resolved}")
+        if recipe:
+            logger.debug(f"Found design_recipe in extras with substrate={recipe.get('substrate_material')}, conductor={recipe.get('conductor_material')}")
 
         substrate = (
             self._first_string(
